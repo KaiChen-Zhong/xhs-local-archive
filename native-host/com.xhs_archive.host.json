@@ -1,0 +1,9 @@
+{
+  "name": "com.xhs_archive.host",
+  "description": "Local archive host for XHS Archive extension",
+  "path": "C:\\\\ABSOLUTE\\\\PATH\\\\TO\\\\native-host\\\\host.cmd",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}

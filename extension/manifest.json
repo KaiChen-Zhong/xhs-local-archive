@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "XHS Local Archive",
+  "version": "0.1.0",
+  "description": "Archive, classify, and export accessible Xiaohongshu favorites/likes into local Markdown.",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "tabs",
+    "activeTab",
+    "nativeMessaging",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.xiaohongshu.com/*",
+    "https://edith.xiaohongshu.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.xiaohongshu.com/*"
+      ],
+      "js": [
+        "xhs-extractors.js",
+        "content-script.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bridge.js"
+      ],
+      "matches": [
+        "https://www.xiaohongshu.com/*"
+      ]
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "XHS Local Archive"
+  },
+  "options_page": "options.html"
+}

@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Local runtime data
+XHS-Archive/
+exports/
+media/
+database.json
+.secret-key
+
+# Browser/test temp data
+.tmp*/
+.tmp-*/
+tmp/
+*.log
+npm-debug.log*
+
+# Local/private notes and research drafts
+.firecrawl/
+xhs-*-research.md
+xhs-plugin-*.md
+xhs-favorites-likes-open-source.md
+
+# Secrets and env
+.env
+.env.*
+*密钥*
+*secret*
+*token*
+*.pem
+*.key
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

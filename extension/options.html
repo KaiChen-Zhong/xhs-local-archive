@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>XHS Local Archive 设置</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="options">
+    <main>
+      <h1>设置</h1>
+      <p>AI 端点使用 OpenAI-compatible 协议。MiMo 或中转站若兼容该协议，可直接填写 base URL。</p>
+      <label>
+        Base URL
+        <input id="baseUrl" placeholder="https://api.example.com/v1">
+      </label>
+      <label>
+        Model
+        <input id="model" placeholder="gpt-4.1-mini">
+      </label>
+      <label>
+        API Key
+        <input id="apiKey" type="password" placeholder="sk-...">
+      </label>
+      <button id="save">保存 AI 设置</button>
+      <button id="testAi">测试 AI</button>
+      <button id="clearAiKey">清除 API Key</button>
+      <button id="ping">检查本地宿主</button>
+      <pre id="result"></pre>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

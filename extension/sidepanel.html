@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>XHS Local Archive</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <h1>收藏分类</h1>
+        <p>标题与封面驱动，五层内自动归档</p>
+      </div>
+      <button id="pingHost" class="iconButton">宿主</button>
+    </header>
+    <header class="toolbar">
+      <button id="captureNow" class="primaryAction">采集当前</button>
+      <button id="startScan">受控扫描</button>
+      <button id="stopScan">停止</button>
+      <button id="classifyAll" class="primaryAction">批量分类</button>
+      <button id="archiveAll">导出卡片</button>
+      <button id="exportAll">全量导出</button>
+      <button id="saveManualValidation">记录手测</button>
+      <button id="exportSelfTest">自检</button>
+      <button id="diagnosePage">诊断</button>
+    </header>
+    <section class="filters">
+      <input id="search" placeholder="搜索标题、作者、分类">
+      <select id="statusFilter">
+        <option value="">全部状态</option>
+        <option value="discovered">未导出</option>
+        <option value="archived">已归档</option>
+        <option value="partial-archived">不完整旧归档</option>
+        <option value="unavailable">不可用</option>
+      </select>
+      <select id="theme">
+        <option value="minimal">黑白极简</option>
+        <option value="comic">波点漫画</option>
+        <option value="neon">霓虹红黑</option>
+        <option value="soft">治愈夜灯</option>
+        <option value="rose">粉白甜感</option>
+        <option value="contrast">高对比</option>
+      </select>
+      <button id="deleteFiltered">删除筛选</button>
+    </section>
+    <section class="categoryNav">
+      <div class="sectionLabel">分类浏览</div>
+      <div id="categoryTrail" class="categoryTrail">全部分类</div>
+      <div id="categoryChildren" class="categoryChildren"></div>
+    </section>
+    <section class="taxonomyPanel">
+      <div class="sectionLabel">分类治理</div>
+      <div id="taxonomySummary" class="taxonomySummary">等待分类库</div>
+      <div class="taxonomyMerge">
+        <input id="mergeFrom" placeholder="要合并的分类路径">
+        <input id="mergeTo" placeholder="目标分类路径">
+        <button id="mergeTaxonomy">合并分类</button>
+        <button id="lockCurrentTaxonomy">锁定当前</button>
+      </div>
+      <div id="taxonomyList" class="taxonomyList"></div>
+    </section>
+    <section class="metricStrip">
+      <div class="status" id="status">等待操作</div>
+      <div class="report" id="report">本地 0 条</div>
+    </section>
+    <section class="insights">
+      <h2 id="personaName">收藏人格卡</h2>
+      <p id="personaText">等待本地数据</p>
+      <div id="receipt"></div>
+      <div id="achievements" class="achievements"></div>
+    </section>
+    <main class="grid" id="notes"></main>
+    <section class="diagnostics">
+      <div class="diagnosticsHeader">
+        <h2>诊断</h2>
+        <button id="clearDiagnostics">清空</button>
+      </div>
+      <pre id="events">暂无诊断事件</pre>
+    </section>
+    <template id="noteCardTemplate">
+      <article class="card">
+        <div class="coverFrame">
+          <img class="cover" alt="">
+          <div class="coverFallback">封面</div>
+          <span class="statusBadge"></span>
+        </div>
+        <div class="body">
+          <h2></h2>
+          <p class="meta"></p>
+          <p class="classification"></p>
+          <p class="complete"></p>
+          <div class="classificationEdit">
+            <input class="pathInput" placeholder="分类路径，如 美食/咖啡甜品/上海">
+            <button class="classifyOne">AI 分类</button>
+            <button class="saveClassification">保存分类</button>
+          </div>
+          <div class="actions">
+            <button class="archive">导出卡片</button>
+            <button class="deleteOne">删本地</button>
+          </div>
+        </div>
+      </article>
+    </template>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
