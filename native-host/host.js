@@ -1419,28 +1419,19 @@ async function callOpenAiCompatible(note, ai, taxonomy = null) {
     })
   ].join("\n\n");
   const coverUrl = note.cover || (note.images || [])[0] || "";
-  const userContent = /^https?:\/\//.test(coverUrl)
+  const hasImageContent = /^https?:\/\//.test(coverUrl);
+  const userContent = hasImageContent
     ? [
         { type: "text", text: prompt },
         { type: "image_url", image_url: { url: coverUrl } }
       ]
     : prompt;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ai.apiKey}`
-    },
-    body: JSON.stringify({
-      model: ai.model,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You produce concise JSON for Markdown archiving." },
-        { role: "user", content: userContent }
-      ]
-    })
-  });
+  let response = await fetchAiChatCompletion(endpoint, ai, userContent);
+  let visionFallback = false;
+  if (!response.ok && hasImageContent && [400, 404, 415, 422].includes(response.status)) {
+    visionFallback = true;
+    response = await fetchAiChatCompletion(endpoint, ai, `${prompt}\n\n封面链接：${coverUrl}`);
+  }
   if (!response.ok) throw new Error(`ai_http_${response.status}`);
   const payload = await response.json();
   const content = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
@@ -1458,8 +1449,28 @@ async function callOpenAiCompatible(note, ai, taxonomy = null) {
     summary,
     highlights,
     filename: sanitizeFilename(filename || summarizeForFilename(note), "xhs-note"),
-    source: "ai"
+    source: "ai",
+    visionFallback
   };
+}
+
+async function fetchAiChatCompletion(endpoint, ai, userContent) {
+  return fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${ai.apiKey}`
+    },
+    body: JSON.stringify({
+      model: ai.model,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "You produce concise JSON for Markdown archiving." },
+        { role: "user", content: userContent }
+      ]
+    })
+  });
 }
 
 async function archiveMedia(note) {

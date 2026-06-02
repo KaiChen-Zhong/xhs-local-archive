@@ -232,6 +232,71 @@ test("local AI fallback classifies from title and cover only", () => {
   assert.doesNotMatch(fallback.highlights, /高赞评论/);
 });
 
+test("native host retries AI classification without image content when provider rejects vision payload", async () => {
+  let calls = 0;
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      calls += 1;
+      if (body.includes("image_url")) {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "vision_not_supported" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                categoryPath: ["美食", "咖啡甜品"],
+                tags: ["咖啡"],
+                summary: "retried without image",
+                highlights: "cover url fallback",
+                filename: "vision-fallback"
+              })
+            }
+          }
+        ]
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = server.address().port;
+    await handleMessage({
+      type: "saveSettings",
+      settings: {
+        ai: {
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          model: "mock-model",
+          apiKey: "mock-key"
+        }
+      }
+    });
+    const note = {
+      noteId: `vision-fallback-${Date.now()}`,
+      title: "咖啡店收藏",
+      cover: "https://img.example/coffee.jpg",
+      url: "https://www.xiaohongshu.com/explore/vision-fallback"
+    };
+    assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+    const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
+    assert.equal(classified.ok, true);
+    assert.equal(calls, 2);
+    assert.deepEqual(classified.note.ai.categoryPath, ["未分类", "待细分"]);
+    assert.deepEqual(classified.note.ai.proposedCategoryPath, ["美食", "咖啡甜品"]);
+    assert.equal(classified.note.ai.taxonomyPending, true);
+    assert.equal(classified.note.ai.visionFallback, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  }
+});
+
 test("native host classifies and manually updates category hierarchy", async () => {
   const note = {
     noteId: `classify-${Date.now()}`,
