@@ -25,8 +25,10 @@
 - 网络响应镜像仅在用户触发采集/扫描后开启。
 - 网络响应镜像限定到小红书相关列表/卡片接口路径。
 - 停止或风险事件后暂停镜像，直到用户再次启动采集。
-- 低频受控扫描，带停止按钮、冷却时间和单次发现上限。
-- 保守扫描默认值：小步滚动、2.6 秒等待、200 条卡片上限。
+- 低频受控扫描，带停止按钮、冷却时间和单次发现上限；每次受控扫描会先清空页面内临时采集缓存并回到顶部。
+- DOM 卡片按页面视觉位置 `top/left` 排序后分配发现顺序，网络响应仍保留接口返回顺序。
+- 保守扫描默认值：小步滚动、2.6 秒等待、5000 条卡片上限。
+- 批量分类默认最多处理 50 条，Native Host 默认 3 并发；文本 AI 与多模态 AI 的初步分析并行执行，再做融合裁决。
 - 批量导出每次最多 10 条，并做节奏控制。
 - 访问受限或验证提示会锁定新采集动作 15 分钟。
 - 扩展侧 IndexedDB 本地缓存。
@@ -51,8 +53,8 @@ See [SAFETY.md](SAFETY.md) for platform-safety boundaries.
 2. Install Native Messaging host.
 3. Open Xiaohongshu favorites or likes page while logged in.
 4. Click `受控扫描`.
-5. Wait until scan stops with `complete`, or stop immediately if access warnings appear. Access-limited or verification stops lock collection actions for 15 minutes.
-6. Click `批量分类`; AI decides category paths up to five levels using only title and cover. If both text and vision AI are configured, text analysis and cover analysis are fused before taxonomy governance.
+5. Wait until scan stops with `complete`, or stop immediately if access warnings appear. Access-limited or verification stops lock collection actions for 15 minutes. For order-sensitive validation, start from a freshly cleared local library; the controlled scan will reset page-side temporary state and scroll back to the top before collecting.
+6. Click `批量分类`; AI decides category paths up to five levels using only title and cover. If both text and vision AI are configured, text analysis and cover analysis run in parallel and are fused before taxonomy governance.
 7. Use `分类治理` to approve pending AI proposals, reject noisy paths, lock stable nodes, or merge duplicates such as `餐饮/咖啡馆` into `美食/咖啡甜品`.
 8. Drill into 大类/小类/更细分类 in the side panel waterfall view.
 9. Click `导出卡片`; batch export asks for confirmation, processes at most 10 records per click, and does not open Xiaohongshu pages.
@@ -151,6 +153,8 @@ npm run check
 npm run self-test
 ```
 
+On Windows, `npm run check` completes all Node.js syntax checks first, then requires a Unix `sh` only for the macOS shell-script syntax step. Use Git Bash/WSL for that last `sh -n` portion, or run the PowerShell acceptance script below.
+
 Full local acceptance on Windows:
 
 ```powershell
@@ -162,10 +166,11 @@ Current automated coverage:
 - Shared note utilities.
 - XHS-like JSON extraction for feed/card payloads.
 - Native host data upsert/list/archive/report and controlled taxonomy approval/merge/lock.
+- Native host batch classification preserves discovery-order result slots while using limited AI concurrency.
 - Native host media download safety limits for private/local URLs.
 - Chrome Native Messaging binary protocol ping.
 - PowerShell install/verify/uninstall/acceptance script syntax parsing.
-- Content script VM harness for manual capture, comment-only filtering, and dynamic risk stop.
+- Content script VM harness for manual capture, visual discovery order, comment-only filtering, and dynamic risk stop.
 - Service worker VM harness for risk lock and capture blocking.
 - Page bridge VM harness for narrowed network mirroring and lookalike-domain rejection.
 - OpenAI-compatible AI endpoint call with mock server.

@@ -186,6 +186,8 @@ async function handleMessage(message, sender) {
     const nativeList = await sendNative({ type: "listNotes" }).catch(() => null);
     const nativeIds = nativeList && nativeList.ok ? (nativeList.notes || []).map((note) => note.noteId).filter(Boolean) : [];
     if (nativeIds.length) await sendNative({ type: "deleteLocal", noteIds: nativeIds }).catch(() => null);
+    const tabId = await activeTabId().catch(() => 0);
+    if (tabId) await sendContentMessage(tabId, { type: "resetCapturedState" }).catch(() => null);
     const deleted = new Set([...localNotes.map((note) => note.noteId).filter(Boolean), ...nativeIds]).size;
     await appendEvent("info", "clear_all_local", { deleted });
     return { ok: true, deleted };

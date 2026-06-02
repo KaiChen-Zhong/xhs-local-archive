@@ -16,6 +16,7 @@ class FakeElement {
     this.src = attrs.src || "";
     this.className = attrs.className || "";
     this.alt = attrs.alt || "";
+    this.rect = attrs.rect || null;
   }
 
   getAttribute(name) {
@@ -39,10 +40,15 @@ class FakeElement {
     if (selector.includes("desc") || selector.includes("content") || selector.includes("note-text")) return this.children.textNodes || [];
     return [];
   }
+
+  getBoundingClientRect() {
+    return this.rect || { top: 0, left: 0, width: 120, height: 160 };
+  }
 }
 
-function makeCard(id) {
+function makeCard(id, rect = null) {
   const root = new FakeElement({
+    attrs: { rect },
     children: {
       img: new FakeElement({ attrs: { src: `https://img.example/${id}.jpg`, currentSrc: `https://img.example/${id}.jpg` } }),
       title: new FakeElement({ text: `标题 ${id}` }),
@@ -51,7 +57,7 @@ function makeCard(id) {
   });
   return new FakeElement({
     text: `标题 ${id}`,
-    attrs: { href: `/explore/${id}?xsec_token=token-${id}`, title: `标题 ${id}` },
+    attrs: { href: `/explore/${id}?xsec_token=token-${id}`, title: `标题 ${id}`, rect },
     parent: root
   });
 }
@@ -193,6 +199,17 @@ async function main() {
   assert.equal(discovered.notes[0].noteId, "noteabc123");
   assert.equal(discovered.notes[0].xsecToken, "token-noteabc123");
 
+  const orderHarness = createHarness();
+  orderHarness.document.cards = [
+    makeCard("lowernote123", { top: 420, left: 20, width: 120, height: 160 }),
+    makeCard("uppernote123", { top: 120, left: 20, width: 120, height: 160 })
+  ];
+  const orderedCapture = await orderHarness.sendToContent({ type: "captureNow" });
+  assert.equal(orderedCapture.ok, true);
+  const ordered = orderHarness.messages.find((message) => message.type === "notesDiscovered");
+  assert.deepEqual(Array.from(ordered.notes, (note) => note.noteId), ["uppernote123", "lowernote123"]);
+  assert.deepEqual(Array.from(ordered.notes, (note) => note.discoveryIndex), [0, 1]);
+
   const diagnostics = await harness.sendToContent({ type: "diagnosePage" });
   assert.equal(diagnostics.ok, true);
   assert.equal(diagnostics.diagnostics.pageType, "profile-favorites");
@@ -231,7 +248,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

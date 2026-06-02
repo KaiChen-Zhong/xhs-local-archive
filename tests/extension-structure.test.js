@@ -173,6 +173,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(sidePanelHtml, /id="clearAllLocal"/);
   assert.match(serviceWorker, /message\.type === "clearAllLocal"/);
   assert.match(serviceWorker, /clearLocalNotes/);
+  assert.match(serviceWorker, /resetCapturedState/);
   assert.match(sidePanel, /Math\.min\(count, 10\)/);
   assert.match(sidePanel, /不打开帖子/);
   assert.match(sidePanel, /手动采集：新增/);

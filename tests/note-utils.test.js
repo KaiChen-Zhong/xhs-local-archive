@@ -301,7 +301,11 @@ test("native host retries AI classification without image content when provider 
 
 test("native host combines text and vision AI before governing classification", async () => {
   const calls = [];
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
   const server = http.createServer((request, response) => {
+    activeRequests += 1;
+    maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
@@ -314,23 +318,26 @@ test("native host combines text and vision AI before governing classification", 
         : parsed.model === "vision-model"
           ? ["美食", "咖啡视觉"]
           : ["美食", "咖啡文本"];
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                categoryPath,
-                tags: ["咖啡"],
-                summary: `${parsed.model} summary`,
-                highlights: "dual ai",
-                confidence: 0.8,
-                filename: "dual-ai"
-              })
+      setTimeout(() => {
+        activeRequests -= 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  categoryPath,
+                  tags: ["咖啡"],
+                  summary: `${parsed.model} summary`,
+                  highlights: "dual ai",
+                  confidence: 0.8,
+                  filename: "dual-ai"
+                })
+              }
             }
-          }
-        ]
-      }));
+          ]
+        }));
+      }, 40);
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -377,6 +384,7 @@ test("native host combines text and vision AI before governing classification", 
     assert.equal(calls.length, 3);
     assert.equal(calls.some((call) => call.model === "vision-model" && call.hasImage), true);
     assert.equal(calls.some((call) => call.model === "text-model" && call.isFusion), true);
+    assert.equal(maxActiveRequests >= 2, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });

@@ -27,6 +27,7 @@ const MEDIA_MAX_VIDEO_BYTES = parseEnvInt("XHS_MEDIA_MAX_VIDEO_BYTES", 300 * 102
 const MEDIA_READ_MAX_BYTES = parseEnvInt("XHS_MEDIA_READ_MAX_BYTES", 25 * 1024 * 1024);
 const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 50);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
+const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 3);
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -163,25 +164,33 @@ async function handleMessage(message) {
 
   if (type === "classifyAll") {
     const limit = Math.max(1, Math.min(Number(message.limit) || CLASSIFY_ALL_LIMIT, CLASSIFY_ALL_LIMIT));
+    const concurrency = Math.max(1, Math.min(Number(message.concurrency) || CLASSIFY_ALL_CONCURRENCY || 1, 8));
     const notes = Object.values(db.notes || {})
       .filter((note) => note.noteId && !note.unavailableReason)
+      .sort(compareNotesByDiscoveryOrder)
       .slice(0, limit);
-    const results = [];
-    for (let index = 0; index < notes.length; index += 1) {
-      if (index > 0 && CLASSIFY_ALL_DELAY_MS > 0) await sleep(CLASSIFY_ALL_DELAY_MS);
-      const note = notes[index];
-      try {
-        const ai = await buildAi(note, db.settings, db.taxonomy);
-        const governed = governClassification(db, ai, { source: ai.source || "ai", noteId: note.noteId });
-        note.ai = { ...(note.ai || {}), ...governed };
-        note.updatedAt = new Date().toISOString();
-        db.notes[note.noteId] = note;
-        results.push({ noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath });
-      } catch (error) {
-        results.push({ noteId: note.noteId, ok: false, error: error.message });
+    const results = new Array(notes.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < notes.length) {
+        const index = cursor;
+        cursor += 1;
+        if (concurrency === 1 && index > 0 && CLASSIFY_ALL_DELAY_MS > 0) await sleep(CLASSIFY_ALL_DELAY_MS);
+        const note = notes[index];
+        try {
+          const ai = await buildAi(note, db.settings, db.taxonomy);
+          const governed = governClassification(db, ai, { source: ai.source || "ai", noteId: note.noteId });
+          note.ai = { ...(note.ai || {}), ...governed };
+          note.updatedAt = new Date().toISOString();
+          db.notes[note.noteId] = note;
+          results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
+        } catch (error) {
+          results[index] = { noteId: note.noteId, ok: false, error: error.message };
+        }
       }
-    }
-    logEvent(db, "info", "classify_all", { count: results.length, ok: results.filter((item) => item.ok).length });
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, notes.length) }, () => worker()));
+    logEvent(db, "info", "classify_all", { count: results.length, ok: results.filter((item) => item && item.ok).length, concurrency });
     saveDb(db);
     return { ok: true, results };
   }
@@ -1472,8 +1481,10 @@ function portableSecretKey() {
 }
 
 async function callDualAiCompatible(note, textAi, visionAi, taxonomy = null) {
-  const text = await callAiAnalyzer(note, textAi, taxonomy, { role: "text", useImage: false }).catch((error) => ({ ok: false, error: error.message }));
-  const vision = await callAiAnalyzer(note, visionAi, taxonomy, { role: "vision", useImage: true }).catch((error) => ({ ok: false, error: error.message }));
+  const [text, vision] = await Promise.all([
+    callAiAnalyzer(note, textAi, taxonomy, { role: "text", useImage: false }).catch((error) => ({ ok: false, error: error.message })),
+    callAiAnalyzer(note, visionAi, taxonomy, { role: "vision", useImage: true }).catch((error) => ({ ok: false, error: error.message }))
+  ]);
   if (!text.ok && !vision.ok) throw new Error(`text:${text.error || "failed"}; vision:${vision.error || "failed"}`);
   const fusionAi = text.ok ? textAi : visionAi;
   try {
@@ -1568,9 +1579,21 @@ function buildAiPrompt(note, taxonomy = null, lines = []) {
         count: node.count || 0
       }))
     : [];
+  const allowedChildrenByParent = {};
+  for (const node of controlledNodes) {
+    const parentPath = node.path.slice(0, -1).join("/") || "ROOT";
+    if (!allowedChildrenByParent[parentPath]) allowedChildrenByParent[parentPath] = [];
+    allowedChildrenByParent[parentPath].push({
+      name: node.name,
+      path: node.path,
+      locked: Boolean(node.locked),
+      count: node.count || 0
+    });
+  }
   return [
     ...lines,
     "已有分类是受控 taxonomy tree，像“界/门/纲/目/科”逐层选择。每一层必须先在当前父节点下复用已有 name，尤其 locked=true 节点。",
+    "逐层选择规则：先从 ROOT 选第一层，再只允许从该父路径的 allowed_children_by_parent_path 中选下一层；不要跨父节点借用同名或近义子类。",
     "若某一层没有合适子节点，不要伪造已提交分类；返回 proposedCategoryPath 表示建议新增路径，同时 categoryPath 使用最接近的已有父路径。",
     "最多五层。",
     JSON.stringify({
@@ -1578,7 +1601,8 @@ function buildAiPrompt(note, taxonomy = null, lines = []) {
       author: note.author || "",
       cover: note.cover || (note.images || [])[0] || "",
       source_url: note.url || "",
-      controlled_taxonomy_nodes: controlledNodes
+      controlled_taxonomy_nodes: controlledNodes,
+      allowed_children_by_parent_path: allowedChildrenByParent
     })
   ].join("\n\n");
 }

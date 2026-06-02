@@ -68,6 +68,11 @@
       });
       return true;
     }
+    if (message && message.type === "resetCapturedState") {
+      resetCaptureState();
+      sendResponse({ ok: true });
+      return true;
+    }
     if (message && message.type === "diagnosePage") {
       sendResponse({ ok: true, diagnostics: pageDiagnostics() });
       return true;
@@ -206,7 +211,37 @@
       "[onclick*='/explore/']",
       "[onclick*='/discovery/item/']"
     ];
-    return Array.from(new Set(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).filter(hasCardUrl))));
+    return sortCardCandidates(Array.from(new Set(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).filter(hasCardUrl)))));
+  }
+
+  function sortCardCandidates(candidates) {
+    return candidates
+      .map((node, index) => ({ node, index, position: visualPosition(node) }))
+      .sort((a, b) => {
+        if (a.position.visible !== b.position.visible) return a.position.visible ? -1 : 1;
+        if (a.position.top !== b.position.top) return a.position.top - b.position.top;
+        if (a.position.left !== b.position.left) return a.position.left - b.position.left;
+        return a.index - b.index;
+      })
+      .map((item) => item.node);
+  }
+
+  function visualPosition(node) {
+    const target = node && typeof node.getBoundingClientRect === "function" ? node : node && node.closest && node.closest("section, article, div") || node;
+    if (!target || typeof target.getBoundingClientRect !== "function") {
+      return { visible: false, top: Number.POSITIVE_INFINITY, left: Number.POSITIVE_INFINITY };
+    }
+    const rect = target.getBoundingClientRect();
+    const top = Number(rect.top);
+    const left = Number(rect.left);
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    const hasBox = Number.isFinite(top) && Number.isFinite(left) && (width > 0 || height > 0);
+    return {
+      visible: hasBox,
+      top: hasBox ? top + Number(window.scrollY || 0) : Number.POSITIVE_INFINITY,
+      left: hasBox ? left : Number.POSITIVE_INFINITY
+    };
   }
 
   function pageType() {
@@ -422,6 +457,7 @@
       reportSafetyStop(safetyStop);
       return { ok: false, started: false, reason: safetyStop };
     }
+    resetCaptureState();
     STATE.scanActive = true;
     STATE.scan = sanitizeScanOptions(options);
     STATE.scanStartedAt = Date.now();
@@ -430,6 +466,7 @@
     STATE.lastKnownCount = STATE.known.size;
     STATE.lastScrollHeight = document.documentElement.scrollHeight;
     STATE.phase = "down-1";
+    scrollToTopForScan();
     const initial = enableCollection("start-scan", true, "list");
     chrome.runtime.sendMessage({
       type: "scanStatus",
@@ -440,6 +477,28 @@
     }).catch(() => {});
     controlledScanStep();
     return { ok: true, started: true, candidateCount: initial.candidates, pageType: initial.pageType };
+  }
+
+  function resetCaptureState() {
+    STATE.known = new Map();
+    STATE.embeddedFingerprints = new Set();
+    STATE.discoverySeq = 0;
+    STATE.lastKnownCount = 0;
+    STATE.newNotesThisScan = 0;
+    STATE.stableRounds = 0;
+    STATE.lastNewAt = 0;
+  }
+
+  function scrollToTopForScan() {
+    try {
+      if (typeof window.scrollTo === "function") {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      }
+    } catch {
+      try {
+        window.scrollTo(0, 0);
+      } catch {}
+    }
   }
 
   function controlledScanStep() {
