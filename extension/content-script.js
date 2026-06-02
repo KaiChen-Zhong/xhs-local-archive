@@ -13,6 +13,8 @@
     lastKnownCount: 0,
     lastScrollHeight: 0,
     discoverySeq: 0,
+    fallbackNetworkSeq: 0,
+    scrollTarget: null,
     bridgeInjected: false,
     collectionEnabled: false,
     collectionMode: "idle"
@@ -23,7 +25,7 @@
     waitMs: 1200,
     stableRoundsToFinish: 10,
     maxMinutes: 360,
-    maxNewNotes: 20000
+    maxNewNotes: 100000
   };
 
   startObserver();
@@ -33,7 +35,7 @@
     if (!STATE.collectionEnabled) return;
     const data = event.data;
     if (!data || data.source !== "xhs-local-archive") return;
-    parseNetworkPayload(data.url, data.body);
+    parseNetworkPayload(data.url, data.body, data);
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -161,12 +163,20 @@
   function rememberNote(note) {
     if (!note || !note.noteId) return null;
     const existing = STATE.known.get(note.noteId);
+    const incomingIsApi = Boolean(note.statuses && note.statuses.apiOrdered);
+    const existingIsApi = Boolean(existing && existing.statuses && existing.statuses.apiOrdered);
     const incomingIsVisual = isVisualCardSource(note.source);
     const existingIsVisual = Boolean(existing && existing.statuses && existing.statuses.visualOrdered);
+    const incomingIndex = Number(note.discoveryIndex);
+    const existingIndex = existing ? Number(existing.discoveryIndex) : Number.NaN;
     const shouldUseIncomingOrder = !existing ||
       !Number.isFinite(existing.discoveryIndex) ||
-      (incomingIsVisual && !existingIsVisual);
-    const discoveryIndex = shouldUseIncomingOrder ? STATE.discoverySeq++ : existing.discoveryIndex;
+      (incomingIsApi && !existingIsApi) ||
+      (incomingIsApi && existingIsApi && Number.isFinite(incomingIndex) && Number.isFinite(existingIndex) && incomingIndex < existingIndex) ||
+      (incomingIsVisual && !existingIsApi && !existingIsVisual);
+    const discoveryIndex = shouldUseIncomingOrder
+      ? Number.isFinite(incomingIndex) ? incomingIndex : STATE.discoverySeq++
+      : existing.discoveryIndex;
     const merged = {
       ...(existing || {}),
       ...note,
@@ -179,6 +189,7 @@
       statuses: {
         ...(existing && existing.statuses || {}),
         ...(note.statuses || {}),
+        apiOrdered: existingIsApi || incomingIsApi,
         visualOrdered: existingIsVisual || incomingIsVisual,
         firstSeenThisScan: !existing
       }
@@ -190,6 +201,7 @@
       merged.xsecToken !== (existing.xsecToken || "") ||
       merged.author !== (existing.author || "") ||
       merged.discoveryIndex !== existing.discoveryIndex ||
+      Boolean(merged.statuses.apiOrdered) !== existingIsApi ||
       Boolean(merged.statuses.visualOrdered) !== existingIsVisual;
     if (!changed) return null;
     STATE.known.set(note.noteId, merged);
@@ -365,13 +377,14 @@
 
   function captureEmbeddedJsonNotes(source) {
     const notes = [];
+    const baseOrder = networkOrderBase({ requestSeq: 0 });
     for (const script of Array.from(document.querySelectorAll("script"))) {
       const text = String(script.textContent || "");
       if (!/(note_id|noteId|note_card|noteCard|display_title|xsec_token|\/explore\/|\/discovery\/item\/)/.test(text)) continue;
       if (text.length > 3000000) continue;
       const payload = parseScriptJson(text);
       if (!payload) continue;
-      notes.push(...globalThis.XhsExtractors.extractNotesFromJsonPayload(payload, `embedded:${source}`).map(cardOnlyNote));
+      notes.push(...globalThis.XhsExtractors.extractNotesFromJsonPayload(payload, `embedded:${source}`).map((note, index) => cardOnlyNote(note, baseOrder + notes.length + index)));
     }
     const filtered = [];
     STATE.embeddedFingerprints = STATE.embeddedFingerprints || new Set();
@@ -446,6 +459,7 @@
   function pageDiagnostics() {
     const anchors = Array.from(document.querySelectorAll("a"));
     const candidates = visibleCardCandidates();
+    const target = activeScrollTarget();
     return {
       url: location.href,
       pageType: pageType(),
@@ -455,6 +469,10 @@
       bridgeInjected: STATE.bridgeInjected,
       candidateCount: candidates.length,
       anchorCount: anchors.length,
+      scrollTarget: scrollTargetLabel(target),
+      scrollTop: Math.round(scrollTopOf(target)),
+      scrollHeight: Math.round(scrollHeightOf(target)),
+      viewportHeight: Math.round(viewportHeightOf(target)),
       noteLikeHrefSamples: anchors
         .map((anchor) => anchor.getAttribute("href") || "")
         .filter((href) => /\/explore\/|\/discovery\/item\/|\/user\/profile\/[A-Za-z0-9_-]+\/[A-Za-z0-9]/.test(href))
@@ -463,7 +481,7 @@
     };
   }
 
-  function parseNetworkPayload(url, body) {
+  function parseNetworkPayload(url, body, meta = {}) {
     let json;
     try {
       json = JSON.parse(body);
@@ -473,8 +491,11 @@
     if (/comment/i.test(url)) {
       return;
     }
-    const notes = globalThis.XhsExtractors.extractNotesFromJsonPayload(json, url)
-      .map(cardOnlyNote)
+    const rawNotes = globalThis.XhsExtractors.extractNotesFromJsonPayload(json, url);
+    const authoritative = isAuthoritativeCollectionPayload(url, rawNotes);
+    const baseOrder = authoritative ? networkOrderBase(meta) : 0;
+    const notes = rawNotes
+      .map((note, index) => cardOnlyNote(note, authoritative ? baseOrder + index : undefined))
       .map(rememberNote)
       .filter(Boolean)
       .map(stripRuntimeFlags);
@@ -486,7 +507,23 @@
     }
   }
 
-  function cardOnlyNote(note) {
+  function networkOrderBase(meta = {}) {
+    const seq = Number(meta.requestSeq);
+    if (Number.isFinite(seq) && seq > 0) return seq * 100000;
+    STATE.fallbackNetworkSeq += 1;
+    return STATE.fallbackNetworkSeq * 100000;
+  }
+
+  function isAuthoritativeCollectionPayload(url, notes) {
+    if (!notes || !notes.length) return false;
+    const text = String(url || "").toLowerCase();
+    if (/comment|notification|message/.test(text)) return false;
+    if (pageType() === "profile-favorites" && /collect|favorite|fav|like|feed|posted|profile|note/.test(text)) return true;
+    return /collect|favorite|fav|like/.test(text);
+  }
+
+  function cardOnlyNote(note, orderIndex) {
+    const apiOrdered = Number.isFinite(Number(orderIndex));
     return {
       noteId: note.noteId,
       url: note.url,
@@ -494,8 +531,9 @@
       author: note.author,
       cover: note.cover || (note.images || [])[0] || "",
       xsecToken: note.xsecToken,
+      discoveryIndex: apiOrdered ? Number(orderIndex) : undefined,
       source: note.source,
-      statuses: { discovered: true, cardOnly: true },
+      statuses: { discovered: true, cardOnly: true, apiOrdered },
       createdAt: note.createdAt
     };
   }
@@ -514,7 +552,8 @@
     STATE.stableRounds = 0;
     STATE.newNotesThisScan = 0;
     STATE.lastKnownCount = STATE.known.size;
-    STATE.lastScrollHeight = document.documentElement.scrollHeight;
+    STATE.scrollTarget = findScrollTarget();
+    STATE.lastScrollHeight = scrollHeightOf(STATE.scrollTarget);
     STATE.phase = "down-1";
     scrollToTopForScan();
     const initial = enableCollection("start-scan", true, "list");
@@ -538,18 +577,73 @@
     STATE.newNotesThisScan = 0;
     STATE.stableRounds = 0;
     STATE.lastNewAt = 0;
+    STATE.scrollTarget = null;
   }
 
   function scrollToTopForScan() {
+    scrollToTarget(activeScrollTarget(), 0);
+  }
+
+  function activeScrollTarget() {
+    if (!STATE.scrollTarget || !isScrollableTarget(STATE.scrollTarget)) STATE.scrollTarget = findScrollTarget();
+    return STATE.scrollTarget;
+  }
+
+  function findScrollTarget() {
+    const documentTarget = document.scrollingElement || document.documentElement || document.body;
+    const candidates = [];
+    if (documentTarget) candidates.push(documentTarget);
+    const nodes = Array.from(document.querySelectorAll && document.querySelectorAll("main, section, div") || []);
+    for (const node of nodes) {
+      if (!node || node === documentTarget) continue;
+      if (!isScrollableTarget(node)) continue;
+      const score = scrollHeightOf(node) - viewportHeightOf(node) + (node.querySelector && node.querySelector("a[href*='/explore/'], a[href*='/user/profile/'], [data-note-id], [data-noteid]") ? 100000 : 0);
+      candidates.push({ node, score });
+    }
+    const ranked = candidates
+      .map((item) => item && item.node ? item : { node: item, score: scrollHeightOf(item) - viewportHeightOf(item) })
+      .filter((item) => item.node && isScrollableTarget(item.node))
+      .sort((a, b) => b.score - a.score);
+    return ranked[0] && ranked[0].node || documentTarget || window;
+  }
+
+  function isScrollableTarget(target) {
+    return scrollHeightOf(target) > viewportHeightOf(target) + 4;
+  }
+
+  function scrollTopOf(target) {
+    if (!target || target === window) return Number(window.scrollY || window.pageYOffset || 0);
+    return Number(target.scrollTop || 0);
+  }
+
+  function scrollHeightOf(target) {
+    if (!target || target === window) return Number(document.documentElement && document.documentElement.scrollHeight || document.body && document.body.scrollHeight || 0);
+    return Number(target.scrollHeight || 0);
+  }
+
+  function viewportHeightOf(target) {
+    if (!target || target === window) return Number(window.innerHeight || document.documentElement && document.documentElement.clientHeight || 0);
+    return Number(target.clientHeight || 0);
+  }
+
+  function scrollToTarget(target, top) {
     try {
-      if (typeof window.scrollTo === "function") {
-        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      if (!target || target === window || target === document.documentElement || target === document.body || target === document.scrollingElement) {
+        if (typeof window.scrollTo === "function") window.scrollTo({ top, left: 0, behavior: "auto" });
+        else window.scrollY = top;
+        if (target && target !== window) target.scrollTop = top;
+        return;
       }
+      target.scrollTop = top;
     } catch {
       try {
-        window.scrollTo(0, 0);
+        window.scrollTo(0, top);
       } catch {}
     }
+  }
+
+  function scrollByTarget(target, delta) {
+    scrollToTarget(target, Math.max(0, scrollTopOf(target) + delta));
   }
 
   function controlledScanStep() {
@@ -568,21 +662,26 @@
       stopControlledScan("max_duration");
       return;
     }
-    if (STATE.newNotesThisScan >= scan.maxNewNotes) {
+    const expectedTotal = expectedNoteTotal();
+    if (STATE.newNotesThisScan >= scan.maxNewNotes && (!expectedTotal || STATE.known.size >= expectedTotal)) {
       stopControlledScan("max_new_notes_limit");
       return;
     }
 
-    const before = window.scrollY;
+    const scrollTarget = activeScrollTarget();
+    const before = scrollTopOf(scrollTarget);
     const direction = STATE.phase === "up" ? -1 : 1;
-    window.scrollBy({ top: scanStepPx(scan) * direction, behavior: "smooth" });
+    scrollByTarget(scrollTarget, scanStepPx(scan) * direction);
     window.setTimeout(() => {
       captureVisibleCards("controlled-scan");
       captureEmbeddedJsonNotes("controlled-scan");
-      const scrollHeight = document.documentElement.scrollHeight;
-      const atBottom = Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 4;
-      const atTop = window.scrollY <= 4;
-      const moved = Math.abs(window.scrollY - before) > 5;
+      const activeTarget = activeScrollTarget();
+      const scrollTop = scrollTopOf(activeTarget);
+      const scrollHeight = scrollHeightOf(activeTarget);
+      const viewportHeight = viewportHeightOf(activeTarget);
+      const atBottom = Math.ceil(scrollTop + viewportHeight) >= scrollHeight - 4;
+      const atTop = scrollTop <= 4;
+      const moved = Math.abs(scrollTop - before) > 5;
       const heightGrew = scrollHeight > STATE.lastScrollHeight + 4;
       const knownGrew = STATE.known.size > STATE.lastKnownCount;
       const atBoundary = (direction > 0 && atBottom) || (direction < 0 && atTop) || !moved;
@@ -611,13 +710,22 @@
         if (STATE.phase === "down-1") {
           STATE.phase = "up";
           STATE.stableRounds = 0;
+          scrollToTarget(activeTarget, Math.max(0, scrollTop - viewportHeight));
           STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs);
           return;
         }
         if (STATE.phase === "up") {
           STATE.phase = "down-2";
           STATE.stableRounds = 0;
+          scrollToTarget(activeTarget, scrollTop + viewportHeight);
           STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs);
+          return;
+        }
+        if (shouldContinueIncompleteScan()) {
+          STATE.phase = "down-1";
+          STATE.stableRounds = 0;
+          scrollToTarget(activeTarget, Math.max(0, scrollTop - Math.max(viewportHeight, scanStepPx(scan))));
+          STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs * 2);
           return;
         }
         stopControlledScan(finalScanReason());
@@ -647,6 +755,11 @@
     const expectedTotal = expectedNoteTotal();
     if (expectedTotal && STATE.known.size < expectedTotal) return "incomplete_expected_total";
     return "complete";
+  }
+
+  function shouldContinueIncompleteScan() {
+    const expectedTotal = expectedNoteTotal();
+    return Boolean(expectedTotal && STATE.known.size < expectedTotal);
   }
 
   function reportSafetyStop(reason) {
@@ -687,12 +800,12 @@
       waitMs: clampNumber(options.waitMs, 900, 8000, SCAN_DEFAULTS.waitMs),
       stableRoundsToFinish: clampNumber(options.stableRoundsToFinish, 6, 30, SCAN_DEFAULTS.stableRoundsToFinish),
       maxMinutes: clampNumber(options.maxMinutes, 5, 720, SCAN_DEFAULTS.maxMinutes),
-      maxNewNotes: clampNumber(options.maxNewNotes, 20, 50000, SCAN_DEFAULTS.maxNewNotes)
+      maxNewNotes: clampNumber(options.maxNewNotes, 20, 500000, SCAN_DEFAULTS.maxNewNotes)
     };
   }
 
   function scanStepPx(scan) {
-    const viewportStep = Math.max(320, Math.floor(Number(window.innerHeight || 0) * 0.65));
+    const viewportStep = Math.max(320, Math.floor(viewportHeightOf(activeScrollTarget()) * 0.65));
     return Math.min(scan.stepPx || SCAN_DEFAULTS.stepPx, viewportStep);
   }
 
@@ -702,15 +815,27 @@
     const missingCover = notes.filter((note) => !note.cover).length;
     const missingUrl = notes.filter((note) => !note.url).length;
     const expectedTotal = expectedNoteTotal();
+    const target = activeScrollTarget();
+    const viewportTop = Math.round(scrollTopOf(target));
+    const viewportBottom = Math.round(scrollTopOf(target) + viewportHeightOf(target));
     return {
       expectedTotal,
       missingTitle,
       missingCover,
       missingUrl,
       coveragePercent: expectedTotal ? Math.min(100, Math.round(notes.length / expectedTotal * 1000) / 10) : 0,
-      viewportTop: Math.round(Number(window.scrollY || 0)),
-      viewportBottom: Math.round(Number(window.scrollY || 0) + Number(window.innerHeight || 0))
+      viewportTop,
+      viewportBottom,
+      scrollTarget: scrollTargetLabel(target)
     };
+  }
+
+  function scrollTargetLabel(target) {
+    if (!target || target === window || target === document.documentElement || target === document.body || target === document.scrollingElement) return "document";
+    const tag = String(target.tagName || "element").toLowerCase();
+    const id = target.id ? `#${target.id}` : "";
+    const cls = String(target.className || "").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((item) => `.${item}`).join("");
+    return `${tag}${id}${cls}`;
   }
 
   function expectedNoteTotal() {

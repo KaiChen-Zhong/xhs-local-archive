@@ -87,11 +87,22 @@ function mergeDiscoveryIndex(existing = {}, incoming = {}) {
   const incomingIndex = Number(incoming.discoveryIndex);
   const hasExistingIndex = Number.isFinite(existingIndex);
   const hasIncomingIndex = Number.isFinite(incomingIndex);
+  const incomingIsApi = isApiOrdered(incoming);
+  const existingIsApi = isApiOrdered(existing);
   const incomingIsVisual = isVisualOrdered(incoming);
   const existingIsVisual = isVisualOrdered(existing);
-  if (hasIncomingIndex && (!hasExistingIndex || (incomingIsVisual && !existingIsVisual))) return incomingIndex;
+  if (hasIncomingIndex && (
+    !hasExistingIndex ||
+    (incomingIsApi && !existingIsApi) ||
+    (incomingIsApi && existingIsApi && incomingIndex < existingIndex) ||
+    (incomingIsVisual && !existingIsApi && !existingIsVisual)
+  )) return incomingIndex;
   if (hasExistingIndex) return existingIndex;
   return hasIncomingIndex ? incomingIndex : undefined;
+}
+
+function isApiOrdered(note = {}) {
+  return Boolean(note.statuses && note.statuses.apiOrdered);
 }
 
 function isVisualOrdered(note = {}) {

@@ -30,7 +30,7 @@ document.getElementById("startScan").addEventListener("click", () => send({
     waitMs: 1200,
     stableRoundsToFinish: 10,
     maxMinutes: 360,
-    maxNewNotes: 20000
+    maxNewNotes: 100000
   }
 }));
 document.getElementById("stopScan").addEventListener("click", () => send({ type: "stopScan" }));
@@ -72,7 +72,8 @@ chrome.storage.session.onChanged.addListener((changes) => {
     const value = changes.scanStatus.newValue;
     const expected = value.expectedTotal ? ` / 目标约 ${value.expectedTotal} / ${value.coveragePercent || 0}%` : "";
     const missing = ` / 缺标题 ${value.missingTitle || 0} / 缺封面 ${value.missingCover || 0}`;
-    statusEl.textContent = `扫描：${value.status}${value.reason ? ` / ${value.reason}` : ""}，已发现 ${value.knownCount || 0}${expected}${missing}`;
+    const scrollTarget = value.scrollTarget ? ` / 滚动 ${value.scrollTarget}` : "";
+    statusEl.textContent = `扫描：${value.status}${value.reason ? ` / ${value.reason}` : ""}，已发现 ${value.knownCount || 0}${expected}${missing}${scrollTarget}`;
   }
 });
 

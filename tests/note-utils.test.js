@@ -81,6 +81,26 @@ test("mergeNote lets visual card order override provisional network order", () =
   assert.equal(merged.statuses.visualOrdered, true);
 });
 
+test("mergeNote keeps API collection order over later visual card order", () => {
+  const merged = mergeNote(
+    {
+      noteId: "n1",
+      discoveryIndex: 100005,
+      source: "network:https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+      statuses: { discovered: true, cardOnly: true, apiOrdered: true }
+    },
+    {
+      noteId: "n1",
+      discoveryIndex: 2,
+      source: "controlled-scan",
+      statuses: { discovered: true, visualOrdered: true }
+    }
+  );
+  assert.equal(merged.discoveryIndex, 100005);
+  assert.equal(merged.statuses.apiOrdered, true);
+  assert.equal(merged.statuses.visualOrdered, true);
+});
+
 test("noteCompleteness reports captured levels", () => {
   assert.equal(noteCompleteness({ noteId: "n1" }), "discovered");
   assert.equal(noteCompleteness({ noteId: "n1", text: "body" }), "discovered");
@@ -141,6 +161,33 @@ test("native host lists visual waterfall order before provisional network order"
   const list = await handleMessage({ type: "listNotes" });
   const ordered = list.notes.filter((note) => note.noteId.startsWith(prefix)).map((note) => note.noteId);
   assert.deepEqual(ordered, [`${prefix}-upper`, `${prefix}-lower`, `${prefix}-network`]);
+  await handleMessage({ type: "deleteLocal", noteIds: notes.map((note) => note.noteId) });
+});
+
+test("native host lists API ordered collection before visual fallback order", async () => {
+  const prefix = `api-order-${Date.now()}`;
+  const notes = [
+    {
+      noteId: `${prefix}-visual`,
+      title: "可见卡片",
+      url: `https://www.xiaohongshu.com/explore/${prefix}visual`,
+      discoveryIndex: 1,
+      source: "controlled-scan",
+      statuses: { discovered: true, visualOrdered: true }
+    },
+    {
+      noteId: `${prefix}-api`,
+      title: "接口卡片",
+      url: `https://www.xiaohongshu.com/explore/${prefix}api`,
+      discoveryIndex: 200000,
+      source: "network:https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+      statuses: { discovered: true, cardOnly: true, apiOrdered: true }
+    }
+  ];
+  assert.equal((await handleMessage({ type: "upsertNotes", notes })).ok, true);
+  const list = await handleMessage({ type: "listNotes" });
+  const ordered = list.notes.filter((note) => note.noteId.startsWith(prefix)).map((note) => note.noteId);
+  assert.deepEqual(ordered, [`${prefix}-api`, `${prefix}-visual`]);
   await handleMessage({ type: "deleteLocal", noteIds: notes.map((note) => note.noteId) });
 });
 

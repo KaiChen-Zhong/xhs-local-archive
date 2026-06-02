@@ -140,6 +140,7 @@ function createHarness() {
     readyState: "complete",
     cards: [makeCard("noteabc123")],
     dataCards: [],
+    scrollContainers: [],
     scripts: [],
     addEventListener() {},
     querySelector() {
@@ -149,6 +150,7 @@ function createHarness() {
       if (selector === "a") return this.cards;
       if (selector === "script") return this.scripts;
       if (selector.includes("data-note")) return this.dataCards;
+      if (selector === "main, section, div") return this.scrollContainers;
       if (selector.includes("/explore/") || selector.includes("/discovery/item/")) return this.cards;
       return [];
     },
@@ -269,6 +271,7 @@ async function main() {
   assert.equal(networkEnabled.ok, true);
   provisionalOrderHarness.sendWindowMessage({
     source: "xhs-local-archive",
+    requestSeq: 1,
     url: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
     body: JSON.stringify({
       data: {
@@ -288,8 +291,45 @@ async function main() {
   const visualMessages = provisionalOrderHarness.messages.filter((message) => message.type === "notesDiscovered");
   const visualOrdered = visualMessages[visualMessages.length - 1];
   assert.deepEqual(Array.from(visualOrdered.notes, (note) => note.noteId), ["visupper123", "vislower123"]);
-  assert.equal(visualOrdered.notes[0].discoveryIndex < visualOrdered.notes[1].discoveryIndex, true);
-  assert.equal(visualOrdered.notes.every((note) => note.statuses.visualOrdered), true);
+  assert.equal(visualOrdered.notes[0].discoveryIndex > visualOrdered.notes[1].discoveryIndex, true);
+  assert.equal(visualOrdered.notes.every((note) => note.statuses.visualOrdered && note.statuses.apiOrdered), true);
+
+  const requestOrderHarness = createHarness();
+  requestOrderHarness.document.cards = [];
+  assert.equal((await requestOrderHarness.sendToContent({ type: "enableNetworkCapture" })).ok, true);
+  requestOrderHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 2,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+    body: JSON.stringify({ data: { items: [{ note_card: { note_id: "requestsecond123", display_title: "第二页", image_list: [{ url: "https://img.example/second.jpg" }] } }] } })
+  });
+  requestOrderHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 1,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+    body: JSON.stringify({ data: { items: [{ note_card: { note_id: "requestfirst123", display_title: "第一页", image_list: [{ url: "https://img.example/first.jpg" }] } }] } })
+  });
+  const requestNotes = requestOrderHarness.messages
+    .filter((message) => message.type === "notesDiscovered")
+    .flatMap((message) => message.notes);
+  const requestFirst = requestNotes.find((note) => note.noteId === "requestfirst123");
+  const requestSecond = requestNotes.find((note) => note.noteId === "requestsecond123");
+  assert.equal(requestFirst.discoveryIndex < requestSecond.discoveryIndex, true);
+
+  const innerScrollHarness = createHarness();
+  innerScrollHarness.document.body.textContent = "笔记・999";
+  const innerScroller = new FakeElement({ attrs: { className: "feeds-container" } });
+  innerScroller.scrollHeight = 5000;
+  innerScroller.clientHeight = 800;
+  innerScroller.scrollTop = 0;
+  innerScrollHarness.document.scrollContainers = [innerScroller];
+  const innerStarted = await innerScrollHarness.sendToContent({ type: "startScan" });
+  assert.equal(innerStarted.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(innerScroller.scrollTop > 0, true);
+  const innerStatus = innerScrollHarness.messages.find((message) => message.type === "scanStatus" && message.status === "running");
+  assert.equal(innerStatus.scrollTarget, "element.feeds-container");
+  await innerScrollHarness.sendToContent({ type: "stopScan" });
 
   const profileHarness = createHarness();
   const profileCard = makeXhsProfileCard("profiletoken123");
@@ -334,9 +374,9 @@ async function main() {
     options: { waitMs: 900, stableRoundsToFinish: 6, maxNewNotes: 20000 }
   });
   assert.equal(incompleteStarted.ok, true);
-  await waitFor(() => incompleteHarness.messages.find((message) => message.type === "scanStatus" && message.status === "stopped"), 1000);
-  const incompleteStop = incompleteHarness.messages.find((message) => message.type === "scanStatus" && message.status === "stopped");
-  assert.equal(incompleteStop.reason, "incomplete_expected_total");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(Boolean(incompleteHarness.messages.find((message) => message.type === "scanStatus" && message.status === "stopped")), false);
+  await incompleteHarness.sendToContent({ type: "stopScan" });
 
   harness.document.cards = [];
   harness.document.dataCards = [makeDataCard("datanote123")];
@@ -371,7 +411,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "provisionalNetworkOrderOverride", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteExpectedTotal", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

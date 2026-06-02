@@ -96,10 +96,13 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   const sidePanelHtml = fs.readFileSync(path.join(root, "extension", "sidepanel.html"), "utf8");
   assert.match(contentScript, /stepPx:\s*760/);
   assert.match(contentScript, /waitMs:\s*1200/);
-  assert.match(contentScript, /maxNewNotes:\s*20000/);
+  assert.match(contentScript, /maxNewNotes:\s*100000/);
   assert.match(contentScript, /coveragePercent/);
   assert.match(contentScript, /missingCover/);
   assert.match(contentScript, /incomplete_expected_total/);
+  assert.match(contentScript, /shouldContinueIncompleteScan/);
+  assert.match(contentScript, /findScrollTarget/);
+  assert.match(contentScript, /apiOrdered/);
   assert.match(contentScript, /lastScrollHeight/);
   assert.match(contentScript, /rememberNote/);
   assert.match(contentScript, /page_hidden/);
@@ -121,7 +124,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(contentScript, /function pageType\(\)/);
   assert.match(contentScript, /profile-favorites/);
   assert.doesNotMatch(contentScript, /const notes = captureVisibleCards\("manual"\)/);
-  assert.match(contentScript, /function cardOnlyNote\(note\)/);
+  assert.match(contentScript, /function cardOnlyNote\(note,\s*orderIndex\)/);
   assert.doesNotMatch(contentScript, /currentDetailContext/);
   assert.match(contentScript, /type === "enableNetworkCapture"/);
   assert.match(contentScript, /count:\s*0,\s*reason:\s*safetyStop/);
@@ -142,6 +145,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(pageBridge, /CAPTURE_PATH_PATTERN/);
   assert.match(pageBridge, /CAPTURE_QUERY_PATTERN/);
   assert.match(pageBridge, /let bridgeActive = false/);
+  assert.match(pageBridge, /requestSeq/);
   assert.match(pageBridge, /source !== "xhs-local-archive-control"/);
   assert.match(pageBridge, /if \(!bridgeActive\) return false/);
   assert.match(serviceWorker, /SCAN_COOLDOWN_MS\s*=\s*30000/);
@@ -176,7 +180,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(sidePanel, /describeResponse/);
   assert.match(sidePanel, /stepPx:\s*760/);
   assert.match(sidePanel, /waitMs:\s*1200/);
-  assert.match(sidePanel, /maxNewNotes:\s*20000/);
+  assert.match(sidePanel, /maxNewNotes:\s*100000/);
   assert.match(sidePanel, /目标约/);
   assert.match(sidePanel, /缺标题/);
   assert.match(sidePanel, /五层/);

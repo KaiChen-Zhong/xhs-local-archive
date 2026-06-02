@@ -769,6 +769,9 @@ function topEntries(counts, limit) {
 }
 
 function compareNotesByDiscoveryOrder(a, b) {
+  const aApi = isApiOrderedNote(a);
+  const bApi = isApiOrderedNote(b);
+  if (aApi !== bApi) return aApi ? -1 : 1;
   const aVisual = isVisualOrderedNote(a);
   const bVisual = isVisualOrderedNote(b);
   if (aVisual !== bVisual) return aVisual ? -1 : 1;
@@ -779,6 +782,10 @@ function compareNotesByDiscoveryOrder(a, b) {
   const aTime = String(a.createdAt || a.updatedAt || "");
   const bTime = String(b.createdAt || b.updatedAt || "");
   return aTime.localeCompare(bTime) || String(a.noteId || "").localeCompare(String(b.noteId || ""));
+}
+
+function isApiOrderedNote(note = {}) {
+  return Boolean(note.statuses && note.statuses.apiOrdered);
 }
 
 function isVisualOrderedNote(note = {}) {

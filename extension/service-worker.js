@@ -402,11 +402,22 @@ function mergeDiscoveryIndexLocal(existing = {}, incoming = {}) {
   const incomingIndex = Number(incoming.discoveryIndex);
   const hasExistingIndex = Number.isFinite(existingIndex);
   const hasIncomingIndex = Number.isFinite(incomingIndex);
+  const incomingIsApi = isApiOrderedLocal(incoming);
+  const existingIsApi = isApiOrderedLocal(existing);
   const incomingIsVisual = isVisualOrderedLocal(incoming);
   const existingIsVisual = isVisualOrderedLocal(existing);
-  if (hasIncomingIndex && (!hasExistingIndex || (incomingIsVisual && !existingIsVisual))) return incomingIndex;
+  if (hasIncomingIndex && (
+    !hasExistingIndex ||
+    (incomingIsApi && !existingIsApi) ||
+    (incomingIsApi && existingIsApi && incomingIndex < existingIndex) ||
+    (incomingIsVisual && !existingIsApi && !existingIsVisual)
+  )) return incomingIndex;
   if (hasExistingIndex) return existingIndex;
   return hasIncomingIndex ? incomingIndex : undefined;
+}
+
+function isApiOrderedLocal(note = {}) {
+  return Boolean(note.statuses && note.statuses.apiOrdered);
 }
 
 function isVisualOrderedLocal(note = {}) {
@@ -446,6 +457,9 @@ async function listLocal() {
 }
 
 function compareNotesByDiscoveryOrder(a, b) {
+  const aApi = isApiOrderedLocal(a);
+  const bApi = isApiOrderedLocal(b);
+  if (aApi !== bApi) return aApi ? -1 : 1;
   const aVisual = isVisualOrderedLocal(a);
   const bVisual = isVisualOrderedLocal(b);
   if (aVisual !== bVisual) return aVisual ? -1 : 1;
