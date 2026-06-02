@@ -28,6 +28,25 @@ const MEDIA_READ_MAX_BYTES = parseEnvInt("XHS_MEDIA_READ_MAX_BYTES", 25 * 1024 *
 const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 50);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
 const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 3);
+const DEFAULT_TAXONOMY_PATHS = [
+  ["美食", "咖啡甜品"],
+  ["美食", "餐厅探店"],
+  ["穿搭", "日常穿搭"],
+  ["美妆", "护肤彩妆"],
+  ["旅行", "攻略目的地"],
+  ["家居", "装修收纳"],
+  ["健康", "运动健身"],
+  ["学习", "知识成长"],
+  ["科技", "数码工具"],
+  ["科技", "AI工具"],
+  ["金融", "股票基金"],
+  ["金融", "宏观财经"],
+  ["安全", "法律证件"],
+  ["情感", "家庭关系"],
+  ["生活", "母婴亲子"],
+  ["生活", "宠物日常"],
+  ["生活", "日常记录"]
+];
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -935,6 +954,15 @@ function taxonomyState(db) {
     ensureApprovedPath(db, ["未分类", "待细分"], { source: "system", locked: true });
     delete taxonomy._ensuringBase;
   }
+  if (taxonomy.defaultSeedVersion !== 1 && !taxonomy._ensuringBase) {
+    taxonomy._ensuringBase = true;
+    for (const path of DEFAULT_TAXONOMY_PATHS) {
+      ensureApprovedPath(db, [path[0]], { source: "system", locked: true });
+      ensureApprovedPath(db, path, { source: "system" });
+    }
+    taxonomy.defaultSeedVersion = 1;
+    delete taxonomy._ensuringBase;
+  }
   return taxonomy;
 }
 
@@ -1077,7 +1105,7 @@ function resolveControlledPath(db, path, options = {}) {
 
 function canCreateApprovedTaxonomy(source, taxonomy) {
   if (["manual", "merge", "system", "legacy", "local"].includes(source)) return true;
-  return !taxonomy.nodes.some((node) => node.approved !== false && pathKey(node.path) !== "未分类/待细分" && node.path[0] !== "未分类");
+  return false;
 }
 
 function addPendingTaxonomyPath(db, path, options = {}) {

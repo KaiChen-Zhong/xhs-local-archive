@@ -205,13 +205,22 @@ test("native host uses OpenAI-compatible settings when archiving", async () => {
     assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
     const archived = await handleMessage({ type: "archiveNote", noteId: note.noteId });
     assert.equal(archived.ok, true);
-    assert.equal(archived.note.ai.category, "测试分类");
+    assert.equal(archived.note.ai.category, "未分类");
+    assert.equal(archived.note.ai.taxonomyPending, true);
+    assert.deepEqual(archived.note.ai.proposedCategoryPath, ["测试分类"]);
     assert.equal(archived.note.ai.summary, "AI mock summary");
     assert.equal(archived.note.ai.highlights, "AI mock highlight\nAI mock second highlight");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
   }
+});
+
+test("native host seeds controlled default taxonomy and keeps new AI roots pending", async () => {
+  const taxonomy = await handleMessage({ type: "getTaxonomy" });
+  assert.equal(taxonomy.ok, true);
+  assert.ok(taxonomy.taxonomy.nodes.some((node) => node.level === 1 && node.locked && node.path.join("/") === "科技"));
+  assert.ok(taxonomy.taxonomy.nodes.some((node) => node.path.join("/") === "金融/股票基金"));
 });
 
 test("local AI fallback classifies from title and cover only", () => {
@@ -289,9 +298,9 @@ test("native host retries AI classification without image content when provider 
     const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
     assert.equal(classified.ok, true);
     assert.equal(calls, 2);
-    assert.deepEqual(classified.note.ai.categoryPath, ["未分类", "待细分"]);
-    assert.deepEqual(classified.note.ai.proposedCategoryPath, ["美食", "咖啡甜品"]);
-    assert.equal(classified.note.ai.taxonomyPending, true);
+    assert.deepEqual(classified.note.ai.categoryPath, ["美食", "咖啡甜品"]);
+    assert.deepEqual(classified.note.ai.proposedCategoryPath, []);
+    assert.equal(classified.note.ai.taxonomyPending, false);
     assert.equal(classified.note.ai.visionFallback, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));

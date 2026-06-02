@@ -258,7 +258,6 @@
     const noteId = extractNoteId(url);
     if (!noteId) return null;
     const root = cardRoot(anchor);
-    const image = root.querySelector("img") || anchor.querySelector && anchor.querySelector("img");
     const authorEl = root.querySelector("[class*='author'], [class*='name']");
     const title = bestTitle(root, anchor);
     return {
@@ -266,12 +265,49 @@
       url,
       title,
       author: textOf(authorEl),
-      cover: image ? image.currentSrc || image.src : "",
+      cover: bestImageUrl(root, anchor),
       xsecToken: new URL(url).searchParams.get("xsec_token") || "",
       source,
       statuses: { discovered: true },
       createdAt: new Date().toISOString()
     };
+  }
+
+  function bestImageUrl(root, anchor) {
+    const urls = [];
+    for (const node of [root, anchor].filter(Boolean)) {
+      const images = Array.from(node.querySelectorAll && node.querySelectorAll("img, picture source, [srcset], [data-src], [data-original], [data-lazy]") || []);
+      for (const image of images) {
+        collectImageUrl(image.currentSrc, urls);
+        collectImageUrl(image.src, urls);
+        collectImageUrl(image.getAttribute && image.getAttribute("src"), urls);
+        collectImageUrl(image.getAttribute && image.getAttribute("data-src"), urls);
+        collectImageUrl(image.getAttribute && image.getAttribute("data-original"), urls);
+        collectImageUrl(image.getAttribute && image.getAttribute("data-lazy"), urls);
+        collectImageUrlFromSrcset(image.srcset || image.getAttribute && image.getAttribute("srcset"), urls);
+      }
+      const styled = Array.from(node.querySelectorAll && node.querySelectorAll("*") || []);
+      for (const item of styled) collectImageUrlFromBackground(item.style && item.style.backgroundImage, urls);
+    }
+    return urls[0] || "";
+  }
+
+  function collectImageUrl(value, urls) {
+    const text = String(value || "").trim();
+    if (/^https?:\/\//.test(text)) urls.push(text);
+  }
+
+  function collectImageUrlFromSrcset(value, urls) {
+    const first = String(value || "")
+      .split(",")
+      .map((item) => item.trim().split(/\s+/)[0])
+      .find((item) => /^https?:\/\//.test(item));
+    if (first) urls.push(first);
+  }
+
+  function collectImageUrlFromBackground(value, urls) {
+    const match = String(value || "").match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/);
+    if (match) urls.push(match[1]);
   }
 
   function cardRoot(anchor) {

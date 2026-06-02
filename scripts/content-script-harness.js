@@ -14,9 +14,11 @@ class FakeElement {
     this.parent = parent;
     this.currentSrc = attrs.currentSrc || "";
     this.src = attrs.src || "";
+    this.srcset = attrs.srcset || "";
     this.className = attrs.className || "";
     this.alt = attrs.alt || "";
     this.rect = attrs.rect || null;
+    this.style = attrs.style || {};
   }
 
   getAttribute(name) {
@@ -35,9 +37,10 @@ class FakeElement {
   }
 
   querySelectorAll(selector) {
-    if (selector.includes("img")) return this.children.images || [];
+    if (selector.includes("img") || selector.includes("srcset") || selector.includes("data-src")) return this.children.images || (this.children.img ? [this.children.img] : []);
     if (selector.includes("video")) return this.children.videos || [];
     if (selector.includes("desc") || selector.includes("content") || selector.includes("note-text")) return this.children.textNodes || [];
+    if (selector === "*") return Object.values(this.children).flat().filter(Boolean);
     return [];
   }
 
@@ -58,6 +61,51 @@ function makeCard(id, rect = null) {
   return new FakeElement({
     text: `标题 ${id}`,
     attrs: { href: `/explore/${id}?xsec_token=token-${id}`, title: `标题 ${id}`, rect },
+    parent: root
+  });
+}
+
+function makeXhsProfileCard(id) {
+  const image = new FakeElement({ attrs: { src: `https://img.example/${id}.jpg`, currentSrc: `https://img.example/${id}.jpg` } });
+  const root = new FakeElement({
+    text: `真实卡 ${id}`,
+    attrs: { rect: { top: 120, left: 40, width: 274, height: 430 } },
+    children: {
+      img: image,
+      title: new FakeElement({ text: `真实卡 ${id}` }),
+      author: new FakeElement({ text: `作者 ${id}` })
+    }
+  });
+  const hiddenExplore = new FakeElement({
+    attrs: {
+      href: `/explore/${id}`,
+      rect: { top: 0, left: 0, width: 0, height: 0 }
+    },
+    parent: root
+  });
+  const visibleProfile = new FakeElement({
+    attrs: {
+      href: `/user/profile/self/${id}?xsec_token=token-${id}&xsec_source=pc_collect`,
+      title: `真实卡 ${id}`,
+      rect: { top: 120, left: 40, width: 274, height: 360 }
+    },
+    parent: root
+  });
+  root.children.anchors = [hiddenExplore, visibleProfile];
+  return { hiddenExplore, visibleProfile };
+}
+
+function makeLazyImageCard(id) {
+  const root = new FakeElement({
+    text: `懒加载 ${id}`,
+    children: {
+      img: new FakeElement({ attrs: { "data-src": `https://img.example/${id}-lazy.jpg` } }),
+      title: new FakeElement({ text: `懒加载 ${id}` })
+    }
+  });
+  return new FakeElement({
+    text: `懒加载 ${id}`,
+    attrs: { href: `/user/profile/self/${id}?xsec_token=token-${id}` },
     parent: root
   });
 }
@@ -210,6 +258,23 @@ async function main() {
   assert.deepEqual(Array.from(ordered.notes, (note) => note.noteId), ["uppernote123", "lowernote123"]);
   assert.deepEqual(Array.from(ordered.notes, (note) => note.discoveryIndex), [0, 1]);
 
+  const profileHarness = createHarness();
+  const profileCard = makeXhsProfileCard("profiletoken123");
+  profileHarness.document.cards = [profileCard.hiddenExplore, profileCard.visibleProfile];
+  const profileCapture = await profileHarness.sendToContent({ type: "captureNow" });
+  assert.equal(profileCapture.ok, true);
+  const profileDiscovered = profileHarness.messages.find((message) => message.type === "notesDiscovered");
+  assert.equal(profileDiscovered.notes[0].noteId, "profiletoken123");
+  assert.match(profileDiscovered.notes[0].url, /xsec_token=token-profiletoken123/);
+  assert.equal(profileDiscovered.notes[0].xsecToken, "token-profiletoken123");
+
+  const lazyHarness = createHarness();
+  lazyHarness.document.cards = [makeLazyImageCard("lazycover123")];
+  const lazyCapture = await lazyHarness.sendToContent({ type: "captureNow" });
+  assert.equal(lazyCapture.ok, true);
+  const lazyDiscovered = lazyHarness.messages.find((message) => message.type === "notesDiscovered");
+  assert.equal(lazyDiscovered.notes[0].cover, "https://img.example/lazycover123-lazy.jpg");
+
   const diagnostics = await harness.sendToContent({ type: "diagnosePage" });
   assert.equal(diagnostics.ok, true);
   assert.equal(diagnostics.diagnostics.pageType, "profile-favorites");
@@ -248,7 +313,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 
