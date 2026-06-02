@@ -607,7 +607,7 @@
           STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs);
           return;
         }
-        stopControlledScan("complete");
+        stopControlledScan(finalScanReason());
         return;
       }
       STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs);
@@ -628,6 +628,12 @@
       knownCount: STATE.known.size,
       ...scanDiagnostics()
     }).catch(() => {});
+  }
+
+  function finalScanReason() {
+    const expectedTotal = expectedNoteTotal();
+    if (expectedTotal && STATE.known.size < expectedTotal) return "incomplete_expected_total";
+    return "complete";
   }
 
   function reportSafetyStop(reason) {

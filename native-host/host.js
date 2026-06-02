@@ -27,7 +27,8 @@ const MEDIA_MAX_VIDEO_BYTES = parseEnvInt("XHS_MEDIA_MAX_VIDEO_BYTES", 300 * 102
 const MEDIA_READ_MAX_BYTES = parseEnvInt("XHS_MEDIA_READ_MAX_BYTES", 25 * 1024 * 1024);
 const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 50);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
-const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 3);
+const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 5);
+const TAXONOMY_LEVEL_NAMES = ["大类", "领域", "主题", "场景", "细项"];
 const DEFAULT_TAXONOMY_PATHS = [
   ["美食", "咖啡甜品"],
   ["美食", "餐厅探店"],
@@ -846,6 +847,7 @@ function publicTaxonomy(db) {
   const entries = deriveTaxonomyEntries(db, nodes)
     .sort((a, b) => (b.count || 0) - (a.count || 0) || pathKey(a.path).localeCompare(pathKey(b.path)));
   return {
+    levelNames: TAXONOMY_LEVEL_NAMES.slice(),
     nodes,
     pendingNodes: taxonomy.pendingNodes.filter((item) => item.status === "pending"),
     entries,
@@ -1230,7 +1232,12 @@ function inferTaxonomy(note) {
     [/家居|装修|收纳|软装|租房|房间|卧室|客厅/, ["家居", "装修收纳"]],
     [/健身|瑜伽|跑步|普拉提|减脂|运动|训练/, ["健康", "运动健身"]],
     [/学习|读书|考研|英语|笔记|效率|自律|课程/, ["学习", "知识成长"]],
-    [/数码|手机|电脑|软件|app|ai|相机|键盘|耳机/, ["科技", "数码工具"]],
+    [/大模型|agent|rag|prompt|提示词|ai工具|openai|claude|deepseek|mcp|llm/, ["科技", "AI工具"]],
+    [/数码|手机|电脑|软件|app|相机|键盘|耳机/, ["科技", "数码工具"]],
+    [/股票|美股|港股|a股|基金|etf|券商|开户|做空|财报|半导体|牛市|熊市|量价|当冲/, ["金融", "股票基金"]],
+    [/宏观|美联储|降息|加息|美元|汇率|通胀|经济|财富风口/, ["金融", "宏观财经"]],
+    [/身份证|证件|诈骗|防骗|法律|合同|安全|燃气|用电|保命/, ["安全", "法律证件"]],
+    [/原生家庭|亲密关系|情绪|心理|分手|婚姻/, ["情感", "家庭关系"]],
     [/母婴|宝宝|儿童|育儿|亲子/, ["生活", "母婴亲子"]],
     [/宠物|猫|狗|猫咪|狗狗/, ["生活", "宠物日常"]]
   ];
@@ -1635,12 +1642,13 @@ function buildAiPrompt(note, taxonomy = null, lines = []) {
     "已有分类是受控 taxonomy tree，像“界/门/纲/目/科”逐层选择。每一层必须先在当前父节点下复用已有 name，尤其 locked=true 节点。",
     "逐层选择规则：先从 ROOT 选第一层，再只允许从该父路径的 allowed_children_by_parent_path 中选下一层；不要跨父节点借用同名或近义子类。",
     "若某一层没有合适子节点，不要伪造已提交分类；返回 proposedCategoryPath 表示建议新增路径，同时 categoryPath 使用最接近的已有父路径。",
-    "最多五层。",
+    `最多五层，层级名依次是：${TAXONOMY_LEVEL_NAMES.join(" / ")}。`,
     JSON.stringify({
       title: note.title,
       author: note.author || "",
       cover: note.cover || (note.images || [])[0] || "",
       source_url: note.url || "",
+      taxonomy_level_names: TAXONOMY_LEVEL_NAMES,
       controlled_taxonomy_nodes: controlledNodes,
       allowed_children_by_parent_path: allowedChildrenByParent
     })

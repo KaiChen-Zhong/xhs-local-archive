@@ -99,6 +99,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(contentScript, /maxNewNotes:\s*20000/);
   assert.match(contentScript, /coveragePercent/);
   assert.match(contentScript, /missingCover/);
+  assert.match(contentScript, /incomplete_expected_total/);
   assert.match(contentScript, /lastScrollHeight/);
   assert.match(contentScript, /rememberNote/);
   assert.match(contentScript, /page_hidden/);
@@ -175,6 +176,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(sidePanel, /waitMs:\s*1200/);
   assert.match(sidePanel, /maxNewNotes:\s*20000/);
   assert.match(sidePanel, /目标约/);
+  assert.match(sidePanel, /缺标题/);
+  assert.match(sidePanel, /五层/);
   assert.match(sidePanelHtml, /id="openSettings"/);
   assert.match(sidePanelHtml, /id="clearAllLocal"/);
   assert.match(serviceWorker, /message\.type === "clearAllLocal"/);

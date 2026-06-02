@@ -290,6 +290,21 @@ async function main() {
   assert.equal(scanStatus.missingCover, 0);
   await scanHarness.sendToContent({ type: "stopScan" });
 
+  const incompleteHarness = createHarness();
+  incompleteHarness.document.body.textContent = "笔记・13224";
+  incompleteHarness.context.window.innerHeight = 800;
+  incompleteHarness.context.document.documentElement.scrollHeight = 800;
+  incompleteHarness.context.window.scrollBy = () => {};
+  incompleteHarness.context.window.setTimeout = (callback) => setTimeout(callback, 0);
+  const incompleteStarted = await incompleteHarness.sendToContent({
+    type: "startScan",
+    options: { waitMs: 900, stableRoundsToFinish: 6, maxNewNotes: 20000 }
+  });
+  assert.equal(incompleteStarted.ok, true);
+  await waitFor(() => incompleteHarness.messages.find((message) => message.type === "scanStatus" && message.status === "stopped"), 1000);
+  const incompleteStop = incompleteHarness.messages.find((message) => message.type === "scanStatus" && message.status === "stopped");
+  assert.equal(incompleteStop.reason, "incomplete_expected_total");
+
   harness.document.cards = [];
   harness.document.dataCards = [makeDataCard("datanote123")];
   harness.document.scripts = [new FakeElement({
@@ -323,8 +338,16 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteExpectedTotal", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
+}
+
+async function waitFor(predicate, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 main().catch((error) => {

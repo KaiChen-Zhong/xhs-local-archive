@@ -219,6 +219,7 @@ test("native host uses OpenAI-compatible settings when archiving", async () => {
 test("native host seeds controlled default taxonomy and keeps new AI roots pending", async () => {
   const taxonomy = await handleMessage({ type: "getTaxonomy" });
   assert.equal(taxonomy.ok, true);
+  assert.deepEqual(taxonomy.taxonomy.levelNames, ["大类", "领域", "主题", "场景", "细项"]);
   assert.ok(taxonomy.taxonomy.nodes.some((node) => node.level === 1 && node.locked && node.path.join("/") === "科技"));
   assert.ok(taxonomy.taxonomy.nodes.some((node) => node.path.join("/") === "金融/股票基金"));
 });
@@ -239,6 +240,9 @@ test("local AI fallback classifies from title and cover only", () => {
   assert.match(fallback.summary, /咖啡店收藏/);
   assert.doesNotMatch(fallback.summary, /正文/);
   assert.doesNotMatch(fallback.highlights, /高赞评论/);
+  assert.deepEqual(buildLocalAiFallback({ title: "让大模型学会新知识 不用RAG不微调" }).categoryPath, ["科技", "AI工具"]);
+  assert.deepEqual(buildLocalAiFallback({ title: "美股离2000年还有多远？" }).categoryPath, ["金融", "股票基金"]);
+  assert.deepEqual(buildLocalAiFallback({ title: "如何正确发身份证 警惕骗子防止受骗" }).categoryPath, ["安全", "法律证件"]);
 });
 
 test("native host retries AI classification without image content when provider rejects vision payload", async () => {

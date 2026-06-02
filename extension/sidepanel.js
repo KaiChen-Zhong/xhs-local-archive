@@ -197,8 +197,9 @@ async function refreshTaxonomy() {
   const entries = response.taxonomy && response.taxonomy.entries || [];
   const nodes = response.taxonomy && response.taxonomy.nodes || [];
   const pending = response.taxonomy && response.taxonomy.pendingNodes || [];
+  const levelNames = response.taxonomy && response.taxonomy.levelNames || ["大类", "领域", "主题", "场景", "细项"];
   const locked = nodes.filter((node) => node.locked).length;
-  taxonomySummaryEl.textContent = `${nodes.length} 个受控节点 · ${entries.length} 条可用路径 · ${locked} 节点锁定 · ${pending.length} 待审`;
+  taxonomySummaryEl.textContent = `${nodes.length} 个受控节点 · ${entries.length} 条可用路径 · ${locked} 节点锁定 · ${pending.length} 待审 · 五层：${levelNames.join(" > ")}`;
   taxonomyListEl.textContent = "";
   if (pending.length) {
     const title = document.createElement("div");
