@@ -207,6 +207,14 @@ async function handleMessage(message, sender) {
     return sendContentMessage(tabId, { type: "diagnosePage" });
   }
 
+  if (message.type === "openNote") {
+    const url = String(message.url || "");
+    if (!isAllowedXhsUrl(url)) return { ok: false, error: "invalid_xhs_url" };
+    const tab = await chrome.tabs.create({ url, active: true });
+    await appendEvent("info", "open_note", { tabId: tab.id || 0 });
+    return { ok: true, tabId: tab.id || 0 };
+  }
+
   if (message.type === "pingHost") {
     return sendNative({ type: "ping" });
   }

@@ -91,9 +91,11 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   const serviceWorker = fs.readFileSync(path.join(root, "extension", "service-worker.js"), "utf8");
   const sidePanel = fs.readFileSync(path.join(root, "extension", "sidepanel.js"), "utf8");
   const sidePanelHtml = fs.readFileSync(path.join(root, "extension", "sidepanel.html"), "utf8");
-  assert.match(contentScript, /stepPx:\s*320/);
+  assert.match(contentScript, /stepPx:\s*280/);
   assert.match(contentScript, /waitMs:\s*2600/);
-  assert.match(contentScript, /maxNewNotes:\s*200/);
+  assert.match(contentScript, /maxNewNotes:\s*5000/);
+  assert.match(contentScript, /lastScrollHeight/);
+  assert.match(contentScript, /rememberNote/);
   assert.match(contentScript, /page_hidden/);
   assert.match(contentScript, /unexpected_domain/);
   assert.match(contentScript, /access_limited/);
@@ -164,9 +166,10 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.doesNotMatch(serviceWorker, /pruneHydrateUrls/);
   assert.match(sidePanelHtml, /id="saveManualValidation"/);
   assert.match(sidePanel, /describeResponse/);
-  assert.match(sidePanel, /stepPx:\s*320/);
+  assert.match(sidePanel, /stepPx:\s*280/);
   assert.match(sidePanel, /waitMs:\s*2600/);
-  assert.match(sidePanel, /maxNewNotes:\s*200/);
+  assert.match(sidePanel, /maxNewNotes:\s*5000/);
+  assert.match(sidePanelHtml, /id="openSettings"/);
   assert.match(sidePanel, /Math\.min\(count, 10\)/);
   assert.match(sidePanel, /不打开帖子/);
   assert.match(sidePanel, /手动采集：新增/);

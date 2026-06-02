@@ -10,17 +10,19 @@
     stableRounds: 0,
     phase: "down-1",
     newNotesThisScan: 0,
+    lastKnownCount: 0,
+    lastScrollHeight: 0,
     bridgeInjected: false,
     collectionEnabled: false,
     collectionMode: "idle"
   };
 
   const SCAN_DEFAULTS = {
-    stepPx: 320,
+    stepPx: 280,
     waitMs: 2600,
-    stableRoundsToFinish: 8,
-    maxMinutes: 45,
-    maxNewNotes: 200
+    stableRoundsToFinish: 10,
+    maxMinutes: 180,
+    maxNewNotes: 5000
   };
 
   startObserver();
@@ -134,20 +136,54 @@
 
   function captureVisibleCards(source) {
     const cards = visibleCardCandidates();
-    const notes = [];
+    const changed = [];
     for (const anchor of cards) {
       const note = parseCard(anchor, source);
-      if (!note || !note.noteId || STATE.known.has(note.noteId)) continue;
-      STATE.known.set(note.noteId, note);
-      notes.push(note);
+      const remembered = rememberNote(note);
+      if (remembered) changed.push(remembered);
     }
-    if (notes.length) {
-      if (STATE.scanActive) STATE.newNotesThisScan += notes.length;
+    if (changed.length) {
+      if (STATE.scanActive) STATE.newNotesThisScan += changed.filter((note) => note.statuses && note.statuses.firstSeenThisScan).length;
       STATE.lastNewAt = Date.now();
       STATE.stableRounds = 0;
-      chrome.runtime.sendMessage({ type: "notesDiscovered", notes }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "notesDiscovered", notes: changed.map(stripRuntimeFlags) }).catch(() => {});
     }
-    return notes;
+    return changed.map(stripRuntimeFlags);
+  }
+
+  function rememberNote(note) {
+    if (!note || !note.noteId) return null;
+    const existing = STATE.known.get(note.noteId);
+    const merged = {
+      ...(existing || {}),
+      ...note,
+      title: note.title || existing && existing.title || "",
+      author: note.author || existing && existing.author || "",
+      url: note.url || existing && existing.url || "",
+      cover: note.cover || existing && existing.cover || "",
+      xsecToken: note.xsecToken || existing && existing.xsecToken || "",
+      statuses: {
+        ...(existing && existing.statuses || {}),
+        ...(note.statuses || {}),
+        firstSeenThisScan: !existing
+      }
+    };
+    const changed = !existing ||
+      merged.title !== (existing.title || "") ||
+      merged.cover !== (existing.cover || "") ||
+      merged.url !== (existing.url || "") ||
+      merged.xsecToken !== (existing.xsecToken || "") ||
+      merged.author !== (existing.author || "");
+    if (!changed) return null;
+    STATE.known.set(note.noteId, merged);
+    return merged;
+  }
+
+  function stripRuntimeFlags(note) {
+    return {
+      ...note,
+      statuses: Object.fromEntries(Object.entries(note.statuses || {}).filter(([key]) => key !== "firstSeenThisScan"))
+    };
   }
 
   function visibleCardCandidates() {
@@ -184,11 +220,10 @@
     const url = new URL(cardUrl, location.href).toString();
     const noteId = extractNoteId(url);
     if (!noteId) return null;
-    const root = anchor.closest("section, div") || anchor;
-    const image = root.querySelector("img");
-    const titleEl = root.querySelector("[class*='title'], span, div");
+    const root = cardRoot(anchor);
+    const image = root.querySelector("img") || anchor.querySelector && anchor.querySelector("img");
     const authorEl = root.querySelector("[class*='author'], [class*='name']");
-    const title = textOf(titleEl) || anchor.getAttribute("title") || textOf(anchor);
+    const title = bestTitle(root, anchor);
     return {
       noteId,
       url,
@@ -200,6 +235,45 @@
       statuses: { discovered: true },
       createdAt: new Date().toISOString()
     };
+  }
+
+  function cardRoot(anchor) {
+    let node = anchor;
+    for (let depth = 0; node && depth < 6; depth += 1) {
+      const hasImage = Boolean(node.querySelector && node.querySelector("img"));
+      const hasText = textOf(node).length > 0;
+      const hasUrl = Boolean(extractCardUrl(node));
+      if (hasImage && hasText && hasUrl) return node;
+      node = node.parentElement;
+    }
+    return anchor.closest("section, article, div") || anchor;
+  }
+
+  function bestTitle(root, anchor) {
+    const attrTitle = anchor.getAttribute("title") || anchor.getAttribute("aria-label") || "";
+    const selectors = [
+      "[class*='title']",
+      "[class*='desc']",
+      "[class*='content']",
+      "figcaption",
+      "h3",
+      "h2",
+      "p"
+    ];
+    for (const selector of selectors) {
+      const value = textOf(root.querySelector(selector));
+      if (looksLikeTitle(value)) return value.slice(0, 200);
+    }
+    if (looksLikeTitle(attrTitle)) return attrTitle.slice(0, 200);
+    const text = textOf(anchor) || textOf(root);
+    return text.split(/[｜|\n]/).map((item) => item.trim()).find(looksLikeTitle) || text.slice(0, 200);
+  }
+
+  function looksLikeTitle(value) {
+    const text = String(value || "").trim();
+    if (text.length < 2 || text.length > 220) return false;
+    if (/^(赞|收藏|评论|分享|作者|关注|图片|视频)$/i.test(text)) return false;
+    return true;
   }
 
   function captureEmbeddedJsonNotes(source) {
@@ -218,12 +292,13 @@
       const fingerprint = `${note.noteId}:${note.title || ""}:${note.cover || ""}`;
       if (STATE.embeddedFingerprints.has(fingerprint)) continue;
       STATE.embeddedFingerprints.add(fingerprint);
-      filtered.push(note);
+      const remembered = rememberNote(note);
+      if (remembered) filtered.push(remembered);
     }
     if (filtered.length) {
-      chrome.runtime.sendMessage({ type: "notesDiscovered", notes: filtered }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "notesDiscovered", notes: filtered.map(stripRuntimeFlags) }).catch(() => {});
     }
-    return filtered;
+    return filtered.map(stripRuntimeFlags);
   }
 
   function parseScriptJson(text) {
@@ -311,8 +386,15 @@
     if (/comment/i.test(url)) {
       return;
     }
-    const notes = globalThis.XhsExtractors.extractNotesFromJsonPayload(json, url).map(cardOnlyNote);
+    const notes = globalThis.XhsExtractors.extractNotesFromJsonPayload(json, url)
+      .map(cardOnlyNote)
+      .map(rememberNote)
+      .filter(Boolean)
+      .map(stripRuntimeFlags);
     if (notes.length) {
+      if (STATE.scanActive) STATE.newNotesThisScan += notes.length;
+      STATE.lastNewAt = Date.now();
+      STATE.stableRounds = 0;
       chrome.runtime.sendMessage({ type: "notesDiscovered", notes }).catch(() => {});
     }
   }
@@ -343,6 +425,8 @@
     STATE.scanStartedAt = Date.now();
     STATE.stableRounds = 0;
     STATE.newNotesThisScan = 0;
+    STATE.lastKnownCount = STATE.known.size;
+    STATE.lastScrollHeight = document.documentElement.scrollHeight;
     STATE.phase = "down-1";
     const initial = enableCollection("start-scan", true, "list");
     chrome.runtime.sendMessage({
@@ -364,6 +448,7 @@
       return;
     }
     captureVisibleCards("controlled-scan");
+    captureEmbeddedJsonNotes("controlled-scan");
 
     const scan = STATE.scan || SCAN_DEFAULTS;
     const elapsedMinutes = (Date.now() - STATE.scanStartedAt) / 60000;
@@ -381,16 +466,23 @@
     window.scrollBy({ top: scan.stepPx * direction, behavior: "smooth" });
     window.setTimeout(() => {
       captureVisibleCards("controlled-scan");
+      captureEmbeddedJsonNotes("controlled-scan");
+      const scrollHeight = document.documentElement.scrollHeight;
       const atBottom = Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 4;
       const atTop = window.scrollY <= 4;
       const moved = Math.abs(window.scrollY - before) > 5;
-      if ((direction > 0 && atBottom) || (direction < 0 && atTop) || !moved) {
-        STATE.stableRounds += 1;
-      } else if (Date.now() - STATE.lastNewAt > scan.waitMs * 4) {
+      const heightGrew = scrollHeight > STATE.lastScrollHeight + 4;
+      const knownGrew = STATE.known.size > STATE.lastKnownCount;
+      const atBoundary = (direction > 0 && atBottom) || (direction < 0 && atTop) || !moved;
+      if (heightGrew || knownGrew) {
+        STATE.stableRounds = 0;
+      } else if (atBoundary) {
         STATE.stableRounds += 1;
       } else {
         STATE.stableRounds = 0;
       }
+      STATE.lastScrollHeight = scrollHeight;
+      STATE.lastKnownCount = STATE.known.size;
 
       chrome.runtime.sendMessage({
         type: "scanStatus",
@@ -398,7 +490,8 @@
         knownCount: STATE.known.size,
         stableRounds: STATE.stableRounds,
         phase: STATE.phase,
-        newNotesThisScan: STATE.newNotesThisScan
+        newNotesThisScan: STATE.newNotesThisScan,
+        scrollHeight
       }).catch(() => {});
 
       if (STATE.stableRounds >= scan.stableRoundsToFinish) {
@@ -471,9 +564,9 @@
     return {
       stepPx: clampNumber(options.stepPx, 220, 560, SCAN_DEFAULTS.stepPx),
       waitMs: clampNumber(options.waitMs, 2200, 8000, SCAN_DEFAULTS.waitMs),
-      stableRoundsToFinish: clampNumber(options.stableRoundsToFinish, 6, 20, SCAN_DEFAULTS.stableRoundsToFinish),
-      maxMinutes: clampNumber(options.maxMinutes, 5, 60, SCAN_DEFAULTS.maxMinutes),
-      maxNewNotes: clampNumber(options.maxNewNotes, 20, 500, SCAN_DEFAULTS.maxNewNotes)
+      stableRoundsToFinish: clampNumber(options.stableRoundsToFinish, 6, 30, SCAN_DEFAULTS.stableRoundsToFinish),
+      maxMinutes: clampNumber(options.maxMinutes, 5, 360, SCAN_DEFAULTS.maxMinutes),
+      maxNewNotes: clampNumber(options.maxNewNotes, 20, 20000, SCAN_DEFAULTS.maxNewNotes)
     };
   }
 

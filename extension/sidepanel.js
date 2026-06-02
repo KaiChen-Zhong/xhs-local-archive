@@ -26,11 +26,11 @@ document.getElementById("captureNow").addEventListener("click", () => send({ typ
 document.getElementById("startScan").addEventListener("click", () => send({
   type: "startScan",
   options: {
-    stepPx: 320,
+    stepPx: 280,
     waitMs: 2600,
-    stableRoundsToFinish: 8,
-    maxMinutes: 45,
-    maxNewNotes: 200
+    stableRoundsToFinish: 10,
+    maxMinutes: 180,
+    maxNewNotes: 5000
   }
 }));
 document.getElementById("stopScan").addEventListener("click", () => send({ type: "stopScan" }));
@@ -56,6 +56,7 @@ document.getElementById("exportAll").addEventListener("click", () => exportAll()
 document.getElementById("saveManualValidation").addEventListener("click", () => saveManualValidation());
 document.getElementById("exportSelfTest").addEventListener("click", () => exportSelfTest());
 document.getElementById("pingHost").addEventListener("click", () => pingHost());
+document.getElementById("openSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("diagnosePage").addEventListener("click", () => send({ type: "diagnosePage" }));
 document.getElementById("clearDiagnostics").addEventListener("click", () => send({ type: "clearDiagnostics" }));
 document.getElementById("deleteFiltered").addEventListener("click", () => deleteFiltered());
@@ -244,6 +245,10 @@ function render(notes) {
     const img = node.querySelector(".cover");
     img.src = note.cover || "";
     img.hidden = !note.cover;
+    const coverLink = node.querySelector(".coverLink");
+    coverLink.disabled = !note.url;
+    coverLink.title = note.url ? "在小红书中打开" : "缺少可用链接";
+    coverLink.addEventListener("click", () => send({ type: "openNote", url: note.url || "" }));
     node.querySelector(".statusBadge").textContent = statusLabel(note);
     node.querySelector("h2").textContent = note.title || note.noteId;
     node.querySelector(".meta").textContent = `${note.author || "unknown"} · ${note.source || "unknown"}`;

@@ -101,6 +101,12 @@ body[data-theme="contrast"] {
   min-width: 0;
 }
 
+.mastheadActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
 .masthead h1 {
   margin: 0;
   font-size: 20px;
@@ -430,7 +436,35 @@ select:focus {
   break-inside: avoid;
 }
 
+.coverLink {
+  display: block;
+  width: 100%;
+  min-height: 118px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coverLink:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.coverLink:disabled {
+  cursor: default;
+}
+
+.coverLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .coverFrame {
+  display: block;
   position: relative;
   min-height: 118px;
   background:

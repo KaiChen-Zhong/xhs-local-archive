@@ -12,7 +12,10 @@
         <h1>收藏分类</h1>
         <p>标题与封面驱动，五层内自动归档</p>
       </div>
-      <button id="pingHost" class="iconButton">宿主</button>
+      <div class="mastheadActions">
+        <button id="openSettings" class="iconButton">设置</button>
+        <button id="pingHost" class="iconButton">宿主</button>
+      </div>
     </header>
     <header class="toolbar">
       <button id="captureNow" class="primaryAction">采集当前</button>
@@ -80,11 +83,13 @@
     </section>
     <template id="noteCardTemplate">
       <article class="card">
-        <div class="coverFrame">
-          <img class="cover" alt="">
-          <div class="coverFallback">封面</div>
-          <span class="statusBadge"></span>
-        </div>
+        <button class="coverLink" type="button" title="在小红书中打开">
+          <span class="coverFrame">
+            <img class="cover" alt="">
+            <span class="coverFallback">封面</span>
+            <span class="statusBadge"></span>
+          </span>
+        </button>
         <div class="body">
           <h2></h2>
           <p class="meta"></p>
