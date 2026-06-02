@@ -186,6 +186,7 @@ async function handleMessage(message) {
     const concurrency = Math.max(1, Math.min(Number(message.concurrency) || CLASSIFY_ALL_CONCURRENCY || 1, 8));
     const notes = Object.values(db.notes || {})
       .filter((note) => note.noteId && !note.unavailableReason)
+      .filter((note) => message.force ? true : needsClassification(note))
       .sort(compareNotesByDiscoveryOrder)
       .slice(0, limit);
     const results = new Array(notes.length);
@@ -753,6 +754,17 @@ function classificationOf(note) {
 
 function classificationKey(note) {
   return classificationOf(note).path.join("/");
+}
+
+function needsClassification(note) {
+  const ai = note && note.ai || {};
+  if (!ai || !Object.keys(ai).length) return true;
+  if (ai.providerError) return true;
+  if (ai.source === "manual" || ai.source === "merge") return false;
+  if (ai.taxonomyPending) return false;
+  const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
+  if (!path.length) return true;
+  return pathKey(path) === "未分类/待细分" && !ai.summary && !ai.aiPipeline;
 }
 
 function normalizeClassification(value = {}, fallback = { path: ["未分类", "待细分"] }) {

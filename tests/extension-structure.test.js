@@ -94,9 +94,11 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   const serviceWorker = fs.readFileSync(path.join(root, "extension", "service-worker.js"), "utf8");
   const sidePanel = fs.readFileSync(path.join(root, "extension", "sidepanel.js"), "utf8");
   const sidePanelHtml = fs.readFileSync(path.join(root, "extension", "sidepanel.html"), "utf8");
-  assert.match(contentScript, /stepPx:\s*280/);
-  assert.match(contentScript, /waitMs:\s*2600/);
-  assert.match(contentScript, /maxNewNotes:\s*5000/);
+  assert.match(contentScript, /stepPx:\s*760/);
+  assert.match(contentScript, /waitMs:\s*1200/);
+  assert.match(contentScript, /maxNewNotes:\s*20000/);
+  assert.match(contentScript, /coveragePercent/);
+  assert.match(contentScript, /missingCover/);
   assert.match(contentScript, /lastScrollHeight/);
   assert.match(contentScript, /rememberNote/);
   assert.match(contentScript, /page_hidden/);
@@ -169,9 +171,10 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.doesNotMatch(serviceWorker, /pruneHydrateUrls/);
   assert.match(sidePanelHtml, /id="saveManualValidation"/);
   assert.match(sidePanel, /describeResponse/);
-  assert.match(sidePanel, /stepPx:\s*280/);
-  assert.match(sidePanel, /waitMs:\s*2600/);
-  assert.match(sidePanel, /maxNewNotes:\s*5000/);
+  assert.match(sidePanel, /stepPx:\s*760/);
+  assert.match(sidePanel, /waitMs:\s*1200/);
+  assert.match(sidePanel, /maxNewNotes:\s*20000/);
+  assert.match(sidePanel, /目标约/);
   assert.match(sidePanelHtml, /id="openSettings"/);
   assert.match(sidePanelHtml, /id="clearAllLocal"/);
   assert.match(serviceWorker, /message\.type === "clearAllLocal"/);

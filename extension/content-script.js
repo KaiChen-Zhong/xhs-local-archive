@@ -19,11 +19,11 @@
   };
 
   const SCAN_DEFAULTS = {
-    stepPx: 280,
-    waitMs: 2600,
+    stepPx: 760,
+    waitMs: 1200,
     stableRoundsToFinish: 10,
-    maxMinutes: 180,
-    maxNewNotes: 5000
+    maxMinutes: 360,
+    maxNewNotes: 20000
   };
 
   startObserver();
@@ -64,7 +64,8 @@
         ok: true,
         count: result.notes.length,
         candidateCount: result.candidates,
-        pageType: result.pageType
+        pageType: result.pageType,
+        diagnostics: scanDiagnostics()
       });
       return true;
     }
@@ -509,7 +510,8 @@
       status: "running",
       knownCount: STATE.known.size,
       candidateCount: initial.candidates,
-      pageType: initial.pageType
+      pageType: initial.pageType,
+      ...scanDiagnostics()
     }).catch(() => {});
     controlledScanStep();
     return { ok: true, started: true, candidateCount: initial.candidates, pageType: initial.pageType };
@@ -560,7 +562,7 @@
 
     const before = window.scrollY;
     const direction = STATE.phase === "up" ? -1 : 1;
-    window.scrollBy({ top: scan.stepPx * direction, behavior: "smooth" });
+    window.scrollBy({ top: scanStepPx(scan) * direction, behavior: "smooth" });
     window.setTimeout(() => {
       captureVisibleCards("controlled-scan");
       captureEmbeddedJsonNotes("controlled-scan");
@@ -588,7 +590,8 @@
         stableRounds: STATE.stableRounds,
         phase: STATE.phase,
         newNotesThisScan: STATE.newNotesThisScan,
-        scrollHeight
+        scrollHeight,
+        ...scanDiagnostics()
       }).catch(() => {});
 
       if (STATE.stableRounds >= scan.stableRoundsToFinish) {
@@ -622,7 +625,8 @@
       type: "scanStatus",
       status: "stopped",
       reason,
-      knownCount: STATE.known.size
+      knownCount: STATE.known.size,
+      ...scanDiagnostics()
     }).catch(() => {});
   }
 
@@ -638,7 +642,8 @@
       type: "scanStatus",
       status: "stopped",
       reason,
-      knownCount: STATE.known.size
+      knownCount: STATE.known.size,
+      ...scanDiagnostics()
     }).catch(() => {});
   }
 
@@ -659,12 +664,40 @@
 
   function sanitizeScanOptions(options) {
     return {
-      stepPx: clampNumber(options.stepPx, 220, 560, SCAN_DEFAULTS.stepPx),
-      waitMs: clampNumber(options.waitMs, 2200, 8000, SCAN_DEFAULTS.waitMs),
+      stepPx: clampNumber(options.stepPx, 320, 1200, SCAN_DEFAULTS.stepPx),
+      waitMs: clampNumber(options.waitMs, 900, 8000, SCAN_DEFAULTS.waitMs),
       stableRoundsToFinish: clampNumber(options.stableRoundsToFinish, 6, 30, SCAN_DEFAULTS.stableRoundsToFinish),
-      maxMinutes: clampNumber(options.maxMinutes, 5, 360, SCAN_DEFAULTS.maxMinutes),
-      maxNewNotes: clampNumber(options.maxNewNotes, 20, 20000, SCAN_DEFAULTS.maxNewNotes)
+      maxMinutes: clampNumber(options.maxMinutes, 5, 720, SCAN_DEFAULTS.maxMinutes),
+      maxNewNotes: clampNumber(options.maxNewNotes, 20, 50000, SCAN_DEFAULTS.maxNewNotes)
     };
+  }
+
+  function scanStepPx(scan) {
+    const viewportStep = Math.max(320, Math.floor(Number(window.innerHeight || 0) * 0.65));
+    return Math.min(scan.stepPx || SCAN_DEFAULTS.stepPx, viewportStep);
+  }
+
+  function scanDiagnostics() {
+    const notes = Array.from(STATE.known.values());
+    const missingTitle = notes.filter((note) => !note.title).length;
+    const missingCover = notes.filter((note) => !note.cover).length;
+    const missingUrl = notes.filter((note) => !note.url).length;
+    const expectedTotal = expectedNoteTotal();
+    return {
+      expectedTotal,
+      missingTitle,
+      missingCover,
+      missingUrl,
+      coveragePercent: expectedTotal ? Math.min(100, Math.round(notes.length / expectedTotal * 1000) / 10) : 0,
+      viewportTop: Math.round(Number(window.scrollY || 0)),
+      viewportBottom: Math.round(Number(window.scrollY || 0) + Number(window.innerHeight || 0))
+    };
+  }
+
+  function expectedNoteTotal() {
+    const body = textOf(document.body);
+    const match = body.match(/(?:笔记|收藏)[・·\s]*(\d{1,7})/);
+    return match ? Number(match[1]) : 0;
   }
 
   function clampNumber(value, min, max, fallback) {

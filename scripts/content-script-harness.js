@@ -280,6 +280,16 @@ async function main() {
   assert.equal(diagnostics.diagnostics.pageType, "profile-favorites");
   assert.equal(diagnostics.diagnostics.candidateCount, 1);
 
+  const scanHarness = createHarness();
+  scanHarness.document.body.textContent = "笔记・13224";
+  const startedScan = await scanHarness.sendToContent({ type: "startScan" });
+  assert.equal(startedScan.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const scanStatus = scanHarness.messages.find((message) => message.type === "scanStatus" && message.status === "running");
+  assert.equal(scanStatus.expectedTotal, 13224);
+  assert.equal(scanStatus.missingCover, 0);
+  await scanHarness.sendToContent({ type: "stopScan" });
+
   harness.document.cards = [];
   harness.document.dataCards = [makeDataCard("datanote123")];
   harness.document.scripts = [new FakeElement({
@@ -313,7 +323,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

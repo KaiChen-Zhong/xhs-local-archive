@@ -26,11 +26,11 @@ document.getElementById("captureNow").addEventListener("click", () => send({ typ
 document.getElementById("startScan").addEventListener("click", () => send({
   type: "startScan",
   options: {
-    stepPx: 280,
-    waitMs: 2600,
+    stepPx: 760,
+    waitMs: 1200,
     stableRoundsToFinish: 10,
-    maxMinutes: 180,
-    maxNewNotes: 5000
+    maxMinutes: 360,
+    maxNewNotes: 20000
   }
 }));
 document.getElementById("stopScan").addEventListener("click", () => send({ type: "stopScan" }));
@@ -70,7 +70,9 @@ themeEl.addEventListener("change", () => saveTheme(themeEl.value));
 chrome.storage.session.onChanged.addListener((changes) => {
   if (changes.scanStatus) {
     const value = changes.scanStatus.newValue;
-    statusEl.textContent = `扫描：${value.status}${value.reason ? ` / ${value.reason}` : ""}，已发现 ${value.knownCount || 0}`;
+    const expected = value.expectedTotal ? ` / 目标约 ${value.expectedTotal} / ${value.coveragePercent || 0}%` : "";
+    const missing = ` / 缺标题 ${value.missingTitle || 0} / 缺封面 ${value.missingCover || 0}`;
+    statusEl.textContent = `扫描：${value.status}${value.reason ? ` / ${value.reason}` : ""}，已发现 ${value.knownCount || 0}${expected}${missing}`;
   }
 });
 

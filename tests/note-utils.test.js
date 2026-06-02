@@ -424,6 +424,42 @@ test("native host classifies and manually updates category hierarchy", async () 
   assert.deepEqual(updated.note.ai.categoryPath, ["审美", "通勤参考", "春夏"]);
 });
 
+test("native host classifyAll advances past already classified notes", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const prefix = `advance-${Date.now()}`;
+  const notes = [
+    {
+      noteId: `${prefix}-manual`,
+      title: "已经人工分类",
+      url: `https://www.xiaohongshu.com/explore/${prefix}manual`,
+      discoveryIndex: -3
+    },
+    {
+      noteId: `${prefix}-coffee`,
+      title: "咖啡店收藏",
+      cover: "https://img.example/coffee.jpg",
+      url: `https://www.xiaohongshu.com/explore/${prefix}coffee`,
+      discoveryIndex: -2
+    },
+    {
+      noteId: `${prefix}-fitness`,
+      title: "居家训练动作",
+      cover: "https://img.example/fitness.jpg",
+      url: `https://www.xiaohongshu.com/explore/${prefix}fitness`,
+      discoveryIndex: -1
+    }
+  ];
+  assert.equal((await handleMessage({ type: "upsertNotes", notes })).ok, true);
+  assert.equal((await handleMessage({
+    type: "updateClassification",
+    noteId: notes[0].noteId,
+    classification: { categoryPath: ["手动", "保留"] }
+  })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", limit: 2, concurrency: 2 });
+  assert.equal(classified.ok, true);
+  assert.deepEqual(classified.results.map((item) => item.noteId), [notes[1].noteId, notes[2].noteId]);
+});
+
 test("native host governs taxonomy with lock and merge", async () => {
   const source = {
     noteId: `tax-source-${Date.now()}`,
