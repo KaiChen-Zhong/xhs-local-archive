@@ -56,6 +56,7 @@ function dedupeArray(values) {
 function mergeNote(existing = {}, incoming = {}) {
   const noteId = incoming.noteId || existing.noteId || stableNoteId(incoming.url || existing.url || "");
   const xsecToken = incoming.xsecToken || existing.xsecToken || "";
+  const discoveryIndex = mergeDiscoveryIndex(existing, incoming);
   const merged = {
     ...existing,
     ...incoming,
@@ -66,7 +67,7 @@ function mergeNote(existing = {}, incoming = {}) {
     url: sourceUrlWithToken(incoming.url || existing.url || "", xsecToken),
     cover: incoming.cover || existing.cover || "",
     xsecToken,
-    discoveryIndex: Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : incoming.discoveryIndex,
+    discoveryIndex,
     source: incoming.source || existing.source || "unknown",
     images: dedupeArray([...(existing.images || []), ...(incoming.images || [])]),
     videos: dedupeArray([...(existing.videos || []), ...(incoming.videos || [])]),
@@ -79,6 +80,23 @@ function mergeNote(existing = {}, incoming = {}) {
   };
   if (!merged.createdAt) merged.createdAt = incoming.createdAt || existing.createdAt || merged.updatedAt;
   return merged;
+}
+
+function mergeDiscoveryIndex(existing = {}, incoming = {}) {
+  const existingIndex = Number(existing.discoveryIndex);
+  const incomingIndex = Number(incoming.discoveryIndex);
+  const hasExistingIndex = Number.isFinite(existingIndex);
+  const hasIncomingIndex = Number.isFinite(incomingIndex);
+  const incomingIsVisual = isVisualOrdered(incoming);
+  const existingIsVisual = isVisualOrdered(existing);
+  if (hasIncomingIndex && (!hasExistingIndex || (incomingIsVisual && !existingIsVisual))) return incomingIndex;
+  if (hasExistingIndex) return existingIndex;
+  return hasIncomingIndex ? incomingIndex : undefined;
+}
+
+function isVisualOrdered(note = {}) {
+  if (note.statuses && note.statuses.visualOrdered) return true;
+  return /^(manual|start-scan|controlled-scan|mutation|scan-stop)$/.test(String(note.source || ""));
 }
 
 function mergeComments(existing, incoming) {

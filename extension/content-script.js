@@ -161,6 +161,12 @@
   function rememberNote(note) {
     if (!note || !note.noteId) return null;
     const existing = STATE.known.get(note.noteId);
+    const incomingIsVisual = isVisualCardSource(note.source);
+    const existingIsVisual = Boolean(existing && existing.statuses && existing.statuses.visualOrdered);
+    const shouldUseIncomingOrder = !existing ||
+      !Number.isFinite(existing.discoveryIndex) ||
+      (incomingIsVisual && !existingIsVisual);
+    const discoveryIndex = shouldUseIncomingOrder ? STATE.discoverySeq++ : existing.discoveryIndex;
     const merged = {
       ...(existing || {}),
       ...note,
@@ -169,10 +175,11 @@
       url: note.url || existing && existing.url || "",
       cover: note.cover || existing && existing.cover || "",
       xsecToken: note.xsecToken || existing && existing.xsecToken || "",
-      discoveryIndex: existing && Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : STATE.discoverySeq++,
+      discoveryIndex,
       statuses: {
         ...(existing && existing.statuses || {}),
         ...(note.statuses || {}),
+        visualOrdered: existingIsVisual || incomingIsVisual,
         firstSeenThisScan: !existing
       }
     };
@@ -181,10 +188,16 @@
       merged.cover !== (existing.cover || "") ||
       merged.url !== (existing.url || "") ||
       merged.xsecToken !== (existing.xsecToken || "") ||
-      merged.author !== (existing.author || "");
+      merged.author !== (existing.author || "") ||
+      merged.discoveryIndex !== existing.discoveryIndex ||
+      Boolean(merged.statuses.visualOrdered) !== existingIsVisual;
     if (!changed) return null;
     STATE.known.set(note.noteId, merged);
     return merged;
+  }
+
+  function isVisualCardSource(source) {
+    return /^(manual|start-scan|controlled-scan|mutation|scan-stop)$/.test(String(source || ""));
   }
 
   function stripRuntimeFlags(note) {

@@ -377,6 +377,7 @@ async function upsertLocal(notes) {
 
 function mergeNoteLocal(existing, incoming) {
   const xsecToken = incoming.xsecToken || existing.xsecToken || "";
+  const discoveryIndex = mergeDiscoveryIndexLocal(existing, incoming);
   return {
     ...existing,
     ...incoming,
@@ -387,7 +388,7 @@ function mergeNoteLocal(existing, incoming) {
     url: sourceUrlWithToken(incoming.url || existing.url || "", xsecToken),
     cover: incoming.cover || existing.cover || "",
     xsecToken,
-    discoveryIndex: Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : incoming.discoveryIndex,
+    discoveryIndex,
     source: incoming.source || existing.source || "unknown",
     images: unique([...(existing.images || []), ...(incoming.images || [])]),
     videos: unique([...(existing.videos || []), ...(incoming.videos || [])]),
@@ -395,6 +396,23 @@ function mergeNoteLocal(existing, incoming) {
     createdAt: existing.createdAt || incoming.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+}
+
+function mergeDiscoveryIndexLocal(existing = {}, incoming = {}) {
+  const existingIndex = Number(existing.discoveryIndex);
+  const incomingIndex = Number(incoming.discoveryIndex);
+  const hasExistingIndex = Number.isFinite(existingIndex);
+  const hasIncomingIndex = Number.isFinite(incomingIndex);
+  const incomingIsVisual = isVisualOrderedLocal(incoming);
+  const existingIsVisual = isVisualOrderedLocal(existing);
+  if (hasIncomingIndex && (!hasExistingIndex || (incomingIsVisual && !existingIsVisual))) return incomingIndex;
+  if (hasExistingIndex) return existingIndex;
+  return hasIncomingIndex ? incomingIndex : undefined;
+}
+
+function isVisualOrderedLocal(note = {}) {
+  if (note.statuses && note.statuses.visualOrdered) return true;
+  return /^(manual|start-scan|controlled-scan|mutation|scan-stop)$/.test(String(note.source || ""));
 }
 
 function sourceUrlWithToken(url, xsecToken) {
@@ -429,6 +447,9 @@ async function listLocal() {
 }
 
 function compareNotesByDiscoveryOrder(a, b) {
+  const aVisual = isVisualOrderedLocal(a);
+  const bVisual = isVisualOrderedLocal(b);
+  if (aVisual !== bVisual) return aVisual ? -1 : 1;
   const aIndex = Number(a.discoveryIndex);
   const bIndex = Number(b.discoveryIndex);
   if (Number.isFinite(aIndex) && Number.isFinite(bIndex) && aIndex !== bIndex) return aIndex - bIndex;

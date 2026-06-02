@@ -62,6 +62,25 @@ test("mergeNote appends stored xsec_token to source url", () => {
   assert.equal(merged.url, "https://www.xiaohongshu.com/explore/n1?xsec_token=token-1");
 });
 
+test("mergeNote lets visual card order override provisional network order", () => {
+  const merged = mergeNote(
+    {
+      noteId: "n1",
+      discoveryIndex: 7,
+      source: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+      statuses: { discovered: true, cardOnly: true }
+    },
+    {
+      noteId: "n1",
+      discoveryIndex: 2,
+      source: "controlled-scan",
+      statuses: { discovered: true, visualOrdered: true }
+    }
+  );
+  assert.equal(merged.discoveryIndex, 2);
+  assert.equal(merged.statuses.visualOrdered, true);
+});
+
 test("noteCompleteness reports captured levels", () => {
   assert.equal(noteCompleteness({ noteId: "n1" }), "discovered");
   assert.equal(noteCompleteness({ noteId: "n1", text: "body" }), "discovered");
@@ -88,6 +107,41 @@ test("native host upserts and lists notes", async () => {
   const list = await handleMessage({ type: "listNotes" });
   assert.equal(list.ok, true);
   assert.ok(list.notes.some((item) => item.noteId === note.noteId));
+});
+
+test("native host lists visual waterfall order before provisional network order", async () => {
+  const prefix = `visual-order-${Date.now()}`;
+  const notes = [
+    {
+      noteId: `${prefix}-network`,
+      title: "接口临时项",
+      url: `https://www.xiaohongshu.com/explore/${prefix}network`,
+      discoveryIndex: 0,
+      source: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+      statuses: { discovered: true, cardOnly: true }
+    },
+    {
+      noteId: `${prefix}-upper`,
+      title: "上方卡片",
+      url: `https://www.xiaohongshu.com/explore/${prefix}upper`,
+      discoveryIndex: 5,
+      source: "controlled-scan",
+      statuses: { discovered: true, visualOrdered: true }
+    },
+    {
+      noteId: `${prefix}-lower`,
+      title: "下方卡片",
+      url: `https://www.xiaohongshu.com/explore/${prefix}lower`,
+      discoveryIndex: 6,
+      source: "controlled-scan",
+      statuses: { discovered: true, visualOrdered: true }
+    }
+  ];
+  assert.equal((await handleMessage({ type: "upsertNotes", notes })).ok, true);
+  const list = await handleMessage({ type: "listNotes" });
+  const ordered = list.notes.filter((note) => note.noteId.startsWith(prefix)).map((note) => note.noteId);
+  assert.deepEqual(ordered, [`${prefix}-upper`, `${prefix}-lower`, `${prefix}-network`]);
+  await handleMessage({ type: "deleteLocal", noteIds: notes.map((note) => note.noteId) });
 });
 
 test("native host archives markdown", async () => {
@@ -552,20 +606,79 @@ test("native host keeps AI taxonomy proposals pending until approved", async () 
     assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
     const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
     assert.equal(classified.ok, true);
-    assert.deepEqual(classified.note.ai.categoryPath, ["未分类", "待细分"]);
+    assert.deepEqual(classified.note.ai.categoryPath, ["生活"]);
     assert.equal(classified.note.ai.taxonomyPending, true);
-    assert.deepEqual(classified.note.ai.proposedCategoryPath, ["香氛", "居家香薰", "木质调", "扩香石", "卧室"]);
+    assert.deepEqual(classified.note.ai.proposedCategoryPath, ["生活", "居家香薰", "木质调", "扩香石", "卧室"]);
     const taxonomy = await handleMessage({ type: "getTaxonomy" });
-    const pending = taxonomy.taxonomy.pendingNodes.find((item) => item.path.join("/") === "香氛/居家香薰/木质调/扩香石/卧室");
+    const pending = taxonomy.taxonomy.pendingNodes.find((item) => item.path.join("/") === "生活/居家香薰/木质调/扩香石/卧室");
     assert.ok(pending);
     const approved = await handleMessage({ type: "approveTaxonomyPath", key: pending.key });
     assert.equal(approved.ok, true);
     assert.equal(approved.changed >= 1, true);
     const list = await handleMessage({ type: "listNotes" });
     const updated = list.notes.find((item) => item.noteId === note.noteId);
-    assert.deepEqual(updated.ai.categoryPath, ["香氛", "居家香薰", "木质调", "扩香石", "卧室"]);
+    assert.deepEqual(updated.ai.categoryPath, ["生活", "居家香薰", "木质调", "扩香石", "卧室"]);
     const after = await handleMessage({ type: "getTaxonomy" });
-    assert.ok(after.taxonomy.nodes.some((item) => item.level === 5 && item.path.join("/") === "香氛/居家香薰/木质调/扩香石/卧室"));
+    assert.ok(after.taxonomy.nodes.some((item) => item.level === 5 && item.path.join("/") === "生活/居家香薰/木质调/扩香石/卧室"));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  }
+});
+
+test("native host keeps approved parent path when AI also proposes deeper taxonomy", async () => {
+  const server = http.createServer((request, response) => {
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                categoryPath: ["金融", "股票基金"],
+                proposedCategoryPath: ["金融", "股票基金", "美股", "指数估值", "长期配置"],
+                tags: ["美股"],
+                summary: "parent path stays browsable",
+                highlights: "proposal is pending only",
+                filename: "ai-parent-proposal"
+              })
+            }
+          }
+        ]
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = server.address().port;
+    await handleMessage({
+      type: "saveSettings",
+      settings: {
+        ai: {
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          model: "mock-model",
+          apiKey: "mock-key"
+        }
+      }
+    });
+    const note = {
+      noteId: `ai-parent-proposal-${Date.now()}`,
+      title: "美股指数估值",
+      cover: "https://img.example/stocks.jpg",
+      url: "https://www.xiaohongshu.com/explore/ai-parent-proposal"
+    };
+    assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+    const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
+    assert.equal(classified.ok, true);
+    assert.deepEqual(classified.note.ai.categoryPath, ["金融", "股票基金"]);
+    assert.equal(classified.note.ai.taxonomyPending, true);
+    assert.deepEqual(classified.note.ai.proposedCategoryPath, ["金融", "股票基金", "美股", "指数估值", "长期配置"]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });

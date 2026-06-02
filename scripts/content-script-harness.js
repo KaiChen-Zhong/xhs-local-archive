@@ -200,9 +200,10 @@ function createHarness() {
     chrome,
     XhsExtractors,
     window: {
-      addEventListener(type, callback) {
-        listeners[type] = callback;
-      },
+    addEventListener(type, callback) {
+      if (type === "message") listeners.windowMessage = callback;
+      else listeners[type] = callback;
+    },
       clearTimeout,
       setTimeout,
       scrollY: 0,
@@ -231,7 +232,11 @@ function createHarness() {
     });
   }
 
-  return { context, document, messages, listeners, mutationCallbacks, effectiveBridgeControls, sendToContent };
+  function sendWindowMessage(data) {
+    if (listeners.windowMessage) listeners.windowMessage({ source: context.window, data });
+  }
+
+  return { context, document, messages, listeners, mutationCallbacks, effectiveBridgeControls, sendToContent, sendWindowMessage };
 }
 
 async function main() {
@@ -257,6 +262,34 @@ async function main() {
   const ordered = orderHarness.messages.find((message) => message.type === "notesDiscovered");
   assert.deepEqual(Array.from(ordered.notes, (note) => note.noteId), ["uppernote123", "lowernote123"]);
   assert.deepEqual(Array.from(ordered.notes, (note) => note.discoveryIndex), [0, 1]);
+
+  const provisionalOrderHarness = createHarness();
+  provisionalOrderHarness.document.cards = [];
+  const networkEnabled = await provisionalOrderHarness.sendToContent({ type: "enableNetworkCapture" });
+  assert.equal(networkEnabled.ok, true);
+  provisionalOrderHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    url: "https://edith.xiaohongshu.com/api/sns/web/v1/note/user/posted",
+    body: JSON.stringify({
+      data: {
+        items: [
+          { note_card: { note_id: "vislower123", display_title: "下方卡", image_list: [{ url: "https://img.example/lower.jpg" }] } },
+          { note_card: { note_id: "visupper123", display_title: "上方卡", image_list: [{ url: "https://img.example/upper.jpg" }] } }
+        ]
+      }
+    })
+  });
+  provisionalOrderHarness.document.cards = [
+    makeCard("vislower123", { top: 420, left: 20, width: 120, height: 160 }),
+    makeCard("visupper123", { top: 120, left: 20, width: 120, height: 160 })
+  ];
+  const visualOverride = await provisionalOrderHarness.sendToContent({ type: "captureNow" });
+  assert.equal(visualOverride.ok, true);
+  const visualMessages = provisionalOrderHarness.messages.filter((message) => message.type === "notesDiscovered");
+  const visualOrdered = visualMessages[visualMessages.length - 1];
+  assert.deepEqual(Array.from(visualOrdered.notes, (note) => note.noteId), ["visupper123", "vislower123"]);
+  assert.equal(visualOrdered.notes[0].discoveryIndex < visualOrdered.notes[1].discoveryIndex, true);
+  assert.equal(visualOrdered.notes.every((note) => note.statuses.visualOrdered), true);
 
   const profileHarness = createHarness();
   const profileCard = makeXhsProfileCard("profiletoken123");
@@ -338,7 +371,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteExpectedTotal", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "provisionalNetworkOrderOverride", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteExpectedTotal", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

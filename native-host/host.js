@@ -32,20 +32,37 @@ const TAXONOMY_LEVEL_NAMES = ["大类", "领域", "主题", "场景", "细项"];
 const DEFAULT_TAXONOMY_PATHS = [
   ["美食", "咖啡甜品"],
   ["美食", "餐厅探店"],
+  ["美食", "家常烹饪"],
   ["穿搭", "日常穿搭"],
+  ["穿搭", "配饰鞋包"],
   ["美妆", "护肤彩妆"],
+  ["美妆", "发型香氛"],
   ["旅行", "攻略目的地"],
+  ["旅行", "酒店交通"],
   ["家居", "装修收纳"],
+  ["家居", "家电用品"],
   ["健康", "运动健身"],
+  ["健康", "身心护理"],
   ["学习", "知识成长"],
+  ["学习", "考试语言"],
   ["科技", "数码工具"],
   ["科技", "AI工具"],
   ["金融", "股票基金"],
   ["金融", "宏观财经"],
+  ["职场", "求职办公"],
+  ["职场", "副业运营"],
+  ["审美", "设计灵感"],
+  ["摄影", "拍照修图"],
+  ["娱乐", "影视音乐"],
+  ["购物", "好物清单"],
+  ["汽车", "买车用车"],
+  ["房产", "买房租房"],
   ["安全", "法律证件"],
+  ["安全", "防骗避坑"],
   ["情感", "家庭关系"],
   ["生活", "母婴亲子"],
   ["生活", "宠物日常"],
+  ["生活", "办事指南"],
   ["生活", "日常记录"]
 ];
 
@@ -729,6 +746,9 @@ function topEntries(counts, limit) {
 }
 
 function compareNotesByDiscoveryOrder(a, b) {
+  const aVisual = isVisualOrderedNote(a);
+  const bVisual = isVisualOrderedNote(b);
+  if (aVisual !== bVisual) return aVisual ? -1 : 1;
   const aIndex = Number(a.discoveryIndex);
   const bIndex = Number(b.discoveryIndex);
   if (Number.isFinite(aIndex) && Number.isFinite(bIndex) && aIndex !== bIndex) return aIndex - bIndex;
@@ -736,6 +756,11 @@ function compareNotesByDiscoveryOrder(a, b) {
   const aTime = String(a.createdAt || a.updatedAt || "");
   const bTime = String(b.createdAt || b.updatedAt || "");
   return aTime.localeCompare(bTime) || String(a.noteId || "").localeCompare(String(b.noteId || ""));
+}
+
+function isVisualOrderedNote(note = {}) {
+  if (note.statuses && note.statuses.visualOrdered) return true;
+  return /^(manual|start-scan|controlled-scan|mutation|scan-stop)$/.test(String(note.source || ""));
 }
 
 function classificationOf(note) {
@@ -819,7 +844,34 @@ function normalizeSynonymPath(path) {
     ["装修", "家居"],
     ["数码科技", "科技"],
     ["工具", "科技"],
-    ["运动", "健康"]
+    ["软件工具", "科技"],
+    ["运动", "健康"],
+    ["医疗", "健康"],
+    ["财经", "金融"],
+    ["投资", "金融"],
+    ["理财", "金融"],
+    ["证券", "金融"],
+    ["工作", "职场"],
+    ["办公", "职场"],
+    ["求职", "职场"],
+    ["副业", "职场"],
+    ["运营", "职场"],
+    ["设计", "审美"],
+    ["灵感", "审美"],
+    ["拍照", "摄影"],
+    ["修图", "摄影"],
+    ["影视", "娱乐"],
+    ["音乐", "娱乐"],
+    ["好物", "购物"],
+    ["买房", "房产"],
+    ["租房", "房产"],
+    ["车", "汽车"],
+    ["法务", "安全"],
+    ["法律", "安全"],
+    ["证件办理", "安全"],
+    ["避坑", "安全"],
+    ["香氛", "生活"],
+    ["办事", "生活"]
   ]);
   if (topMap.has(top)) return [topMap.get(top), ...normalized.slice(1)].slice(0, 5);
   return normalized;
@@ -884,7 +936,33 @@ function governClassification(db, classification, options = {}) {
   const normalized = normalizeClassification(classification || {});
   const source = options.source || normalized.source || "auto";
   const resolved = resolveControlledPath(db, normalized.categoryPath, { source, noteId: options.noteId });
-  const canonicalPath = resolved.path;
+  let canonicalPath = resolved.path;
+  let pending = resolved.pending || null;
+  let pendingKey = resolved.pendingKey || "";
+  let proposedPath = resolved.proposedPath || [];
+  const explicitProposal = normalizeCategoryPath(classification && classification.proposedCategoryPath || []);
+  const normalizedProposal = normalizeSynonymPath(explicitProposal);
+  if (normalizedProposal.length && pathKey(normalizedProposal) !== pathKey(canonicalPath)) {
+    const approvedProposal = findApprovedPathByAlias(db, explicitProposal) ||
+      findApprovedPathByAlias(db, normalizedProposal) ||
+      (findNodeByPath(db, normalizedProposal) && findNodeByPath(db, normalizedProposal).path);
+    if (approvedProposal) {
+      canonicalPath = approvedProposal.slice();
+      pending = null;
+      pendingKey = "";
+      proposedPath = [];
+    } else {
+      const pendingNode = addPendingTaxonomyPath(db, normalizedProposal, {
+        acceptedPath: canonicalPath,
+        noteId: options.noteId,
+        source
+      });
+      pending = true;
+      pendingKey = pendingNode.key;
+      proposedPath = normalizedProposal;
+    }
+  }
+  const canonicalNode = findNodeByPath(db, canonicalPath) || resolved.node;
   return {
     ...(classification || {}),
     ...normalized,
@@ -893,10 +971,10 @@ function governClassification(db, classification, options = {}) {
     category: canonicalPath[0] || "未分类",
     subcategory: canonicalPath[1] || "待细分",
     taxonomyKey: pathKey(canonicalPath),
-    taxonomyLocked: Boolean(resolved.node && resolved.node.locked),
-    taxonomyPending: Boolean(resolved.pending),
-    taxonomyPendingKey: resolved.pendingKey || "",
-    proposedCategoryPath: resolved.proposedPath || [],
+    taxonomyLocked: Boolean(canonicalNode && canonicalNode.locked),
+    taxonomyPending: Boolean(pending),
+    taxonomyPendingKey: pendingKey,
+    proposedCategoryPath: proposedPath,
     source
   };
 }
@@ -968,13 +1046,13 @@ function taxonomyState(db) {
     ensureApprovedPath(db, ["未分类", "待细分"], { source: "system", locked: true });
     delete taxonomy._ensuringBase;
   }
-  if (taxonomy.defaultSeedVersion !== 1 && !taxonomy._ensuringBase) {
+  if (taxonomy.defaultSeedVersion !== 2 && !taxonomy._ensuringBase) {
     taxonomy._ensuringBase = true;
     for (const path of DEFAULT_TAXONOMY_PATHS) {
       ensureApprovedPath(db, [path[0]], { source: "system", locked: true });
       ensureApprovedPath(db, path, { source: "system" });
     }
-    taxonomy.defaultSeedVersion = 1;
+    taxonomy.defaultSeedVersion = 2;
     delete taxonomy._ensuringBase;
   }
   return taxonomy;
@@ -1235,8 +1313,15 @@ function inferTaxonomy(note) {
     [/大模型|agent|rag|prompt|提示词|ai工具|openai|claude|deepseek|mcp|llm/, ["科技", "AI工具"]],
     [/数码|手机|电脑|软件|app|相机|键盘|耳机/, ["科技", "数码工具"]],
     [/股票|美股|港股|a股|基金|etf|券商|开户|做空|财报|半导体|牛市|熊市|量价|当冲/, ["金融", "股票基金"]],
-    [/宏观|美联储|降息|加息|美元|汇率|通胀|经济|财富风口/, ["金融", "宏观财经"]],
-    [/身份证|证件|诈骗|防骗|法律|合同|安全|燃气|用电|保命/, ["安全", "法律证件"]],
+    [/宏观|美联储|降息|加息|美元|汇率|通胀|经济|财富风口|财经|理财|投资/, ["金融", "宏观财经"]],
+    [/求职|简历|面试|职场|工作|办公|副业|运营|创业/, ["职场", "求职办公"]],
+    [/设计|审美|灵感|排版|配色|海报|字体/, ["审美", "设计灵感"]],
+    [/拍照|摄影|修图|滤镜|构图|相机/, ["摄影", "拍照修图"]],
+    [/电影|电视剧|综艺|音乐|演唱会|明星|追剧/, ["娱乐", "影视音乐"]],
+    [/好物|购物|开箱|测评|平替|清单|推荐/, ["购物", "好物清单"]],
+    [/买房|租房|房贷|楼市|房产|看房/, ["房产", "买房租房"]],
+    [/汽车|买车|用车|新能源车|试驾|车险/, ["汽车", "买车用车"]],
+    [/身份证|证件|诈骗|防骗|法律|合同|安全|燃气|用电|保命|避坑|维权/, ["安全", "法律证件"]],
     [/原生家庭|亲密关系|情绪|心理|分手|婚姻/, ["情感", "家庭关系"]],
     [/母婴|宝宝|儿童|育儿|亲子/, ["生活", "母婴亲子"]],
     [/宠物|猫|狗|猫咪|狗狗/, ["生活", "宠物日常"]]
@@ -1642,6 +1727,8 @@ function buildAiPrompt(note, taxonomy = null, lines = []) {
     "已有分类是受控 taxonomy tree，像“界/门/纲/目/科”逐层选择。每一层必须先在当前父节点下复用已有 name，尤其 locked=true 节点。",
     "逐层选择规则：先从 ROOT 选第一层，再只允许从该父路径的 allowed_children_by_parent_path 中选下一层；不要跨父节点借用同名或近义子类。",
     "若某一层没有合适子节点，不要伪造已提交分类；返回 proposedCategoryPath 表示建议新增路径，同时 categoryPath 使用最接近的已有父路径。",
+    "只有标题和封面完全无法判断主题时，categoryPath 才允许是 [\"未分类\", \"待细分\"]；只要能判断大类，就必须落入已存在的大类或最接近的已存在父路径。",
+    "categoryPath 是最终可浏览分类路径；proposedCategoryPath 只是待审建议，不能替代 categoryPath。",
     `最多五层，层级名依次是：${TAXONOMY_LEVEL_NAMES.join(" / ")}。`,
     JSON.stringify({
       title: note.title,
@@ -1685,10 +1772,8 @@ function classificationFromParsed(parsed, note) {
   const highlights = normalizeAiText(parsed.highlights);
   const filename = normalizeAiText(parsed.filename);
   return {
-    ...normalizeClassification(parsed.proposedCategoryPath && normalizeCategoryPath(parsed.proposedCategoryPath).length ? {
-      ...parsed,
-      categoryPath: parsed.proposedCategoryPath
-    } : parsed, inferTaxonomy(note)),
+    ...normalizeClassification(parsed, inferTaxonomy(note)),
+    proposedCategoryPath: normalizeCategoryPath(parsed.proposedCategoryPath || []),
     tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 12) : [],
     summary,
     highlights,
