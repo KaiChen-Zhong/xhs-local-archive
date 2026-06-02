@@ -37,6 +37,7 @@ class FakeElement {
   }
 
   querySelectorAll(selector) {
+    if (selector.includes("href") || selector.includes("data-note")) return this.children.anchors || [];
     if (selector.includes("img") || selector.includes("srcset") || selector.includes("data-src")) return this.children.images || (this.children.img ? [this.children.img] : []);
     if (selector.includes("video")) return this.children.videos || [];
     if (selector.includes("desc") || selector.includes("content") || selector.includes("note-text")) return this.children.textNodes || [];
@@ -126,6 +127,28 @@ function makeDataCard(id) {
   });
 }
 
+function makeSectionCard(id, rect = null) {
+  const root = new FakeElement({
+    text: `区块卡 ${id}`,
+    attrs: { rect },
+    children: {
+      img: new FakeElement({ attrs: { src: `https://img.example/${id}.jpg`, currentSrc: `https://img.example/${id}.jpg` } }),
+      title: new FakeElement({ text: `区块卡 ${id}` }),
+      author: new FakeElement({ text: `作者 ${id}` })
+    }
+  });
+  const explore = new FakeElement({
+    attrs: { href: `/explore/${id}`, rect },
+    parent: root
+  });
+  const profile = new FakeElement({
+    attrs: { href: `/user/profile/account/${id}?xsec_token=token-${id}`, title: `区块卡 ${id}`, rect },
+    parent: root
+  });
+  root.children.anchors = [explore, profile];
+  return root;
+}
+
 function createHarness() {
   const messages = [];
   const effectiveBridgeControls = [];
@@ -139,6 +162,7 @@ function createHarness() {
     visibilityState: "visible",
     readyState: "complete",
     cards: [makeCard("noteabc123")],
+    sections: [],
     dataCards: [],
     scrollContainers: [],
     scripts: [],
@@ -148,6 +172,7 @@ function createHarness() {
     },
     querySelectorAll(selector) {
       if (selector === "a") return this.cards;
+      if (selector === "section") return this.sections;
       if (selector === "script") return this.scripts;
       if (selector.includes("data-note")) return this.dataCards;
       if (selector === "main, section, div") return this.scrollContainers;
@@ -316,6 +341,90 @@ async function main() {
   const requestSecond = requestNotes.find((note) => note.noteId === "requestsecond123");
   assert.equal(requestFirst.discoveryIndex < requestSecond.discoveryIndex, true);
 
+  const cursorHarness = createHarness();
+  cursorHarness.document.cards = [];
+  assert.equal((await cursorHarness.sendToContent({ type: "enableNetworkCapture" })).ok, true);
+  cursorHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 1,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30&cursor=cursoranchor123",
+    body: JSON.stringify({
+      data: {
+        notes: [
+          { note_id: "cursorchilda123", display_title: "锚点后一", cover: { url_default: "https://img.example/child-a.jpg" }, xsec_token: "token-child-a" },
+          { note_id: "cursorchildb123", display_title: "锚点后二", cover: { url_default: "https://img.example/child-b.jpg" }, xsec_token: "token-child-b" }
+        ],
+        cursor: "cursorchildb123"
+      }
+    })
+  });
+  cursorHarness.document.sections = [
+    makeSectionCard("sectionfirst123", { top: 300, left: 500, width: 120, height: 160 }),
+    makeSectionCard("sectionsecond123", { top: 120, left: 20, width: 120, height: 160 }),
+    makeSectionCard("cursoranchor123", { top: 180, left: 800, width: 120, height: 160 })
+  ];
+  const cursorCapture = await cursorHarness.sendToContent({ type: "captureNow" });
+  assert.equal(cursorCapture.ok, true);
+  const latestCursorNotes = latestNotesById(cursorHarness.messages);
+  assert.deepEqual([
+    latestCursorNotes.get("sectionfirst123").discoveryIndex,
+    latestCursorNotes.get("sectionsecond123").discoveryIndex,
+    latestCursorNotes.get("cursoranchor123").discoveryIndex,
+    latestCursorNotes.get("cursorchilda123").discoveryIndex,
+    latestCursorNotes.get("cursorchildb123").discoveryIndex
+  ], [0, 1, 2, 3, 4]);
+  assert.equal(latestCursorNotes.get("cursorchilda123").statuses.collectionOrdered, true);
+
+  const rootAfterChildHarness = createHarness();
+  rootAfterChildHarness.document.cards = [];
+  assert.equal((await rootAfterChildHarness.sendToContent({ type: "enableNetworkCapture" })).ok, true);
+  rootAfterChildHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 2,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30&cursor=rootc123",
+    body: JSON.stringify({ data: { notes: [
+      { note_id: "rootd123", display_title: "第四", cover: { url_default: "https://img.example/d.jpg" } },
+      { note_id: "roote123", display_title: "第五", cover: { url_default: "https://img.example/e.jpg" } }
+    ], cursor: "roote123" } })
+  });
+  rootAfterChildHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 1,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30",
+    body: JSON.stringify({ data: { notes: [
+      { note_id: "roota123", display_title: "第一", cover: { url_default: "https://img.example/a.jpg" } },
+      { note_id: "rootb123", display_title: "第二", cover: { url_default: "https://img.example/b.jpg" } },
+      { note_id: "rootc123", display_title: "第三", cover: { url_default: "https://img.example/c.jpg" } }
+    ], cursor: "rootc123" } })
+  });
+  const rootLatest = latestNotesById(rootAfterChildHarness.messages);
+  assert.deepEqual(["roota123", "rootb123", "rootc123", "rootd123", "roote123"].map((id) => rootLatest.get(id).discoveryIndex), [0, 1, 2, 3, 4]);
+
+  const overlapHarness = createHarness();
+  overlapHarness.document.cards = [];
+  assert.equal((await overlapHarness.sendToContent({ type: "enableNetworkCapture" })).ok, true);
+  overlapHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 1,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30",
+    body: JSON.stringify({ data: { notes: [
+      { note_id: "overlapa123", display_title: "A", cover: { url_default: "https://img.example/a.jpg" } },
+      { note_id: "overlapb123", display_title: "B", cover: { url_default: "https://img.example/b.jpg" } },
+      { note_id: "overlapc123", display_title: "C", cover: { url_default: "https://img.example/c.jpg" } }
+    ], cursor: "overlapc123" } })
+  });
+  overlapHarness.sendWindowMessage({
+    source: "xhs-local-archive",
+    requestSeq: 2,
+    url: "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30&cursor=overlapb123",
+    body: JSON.stringify({ data: { notes: [
+      { note_id: "overlapc123", display_title: "C", cover: { url_default: "https://img.example/c.jpg" } },
+      { note_id: "overlapd123", display_title: "D", cover: { url_default: "https://img.example/d.jpg" } }
+    ], cursor: "overlapd123" } })
+  });
+  const overlapLatest = latestNotesById(overlapHarness.messages);
+  assert.deepEqual(["overlapa123", "overlapb123", "overlapc123", "overlapd123"].map((id) => overlapLatest.get(id).discoveryIndex), [0, 1, 2, 3]);
+
   const innerScrollHarness = createHarness();
   innerScrollHarness.document.body.textContent = "笔记・999";
   const innerScroller = new FakeElement({ attrs: { className: "feeds-container" } });
@@ -411,8 +520,17 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "collectionCursorAnchors", "collectionRootOutOfOrder", "collectionOverlapDedupe", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
+}
+
+function latestNotesById(messages) {
+  const latest = new Map();
+  for (const message of messages) {
+    if (message.type !== "notesDiscovered") continue;
+    for (const note of message.notes || []) latest.set(note.noteId, note);
+  }
+  return latest;
 }
 
 async function waitFor(predicate, timeoutMs) {

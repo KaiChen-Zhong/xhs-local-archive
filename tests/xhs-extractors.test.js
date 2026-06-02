@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  extractCollectionPageNotes,
   extractNotesFromJsonPayload,
   extractNoteId
 } = require("../extension/xhs-extractors");
@@ -41,6 +42,23 @@ test("extracts feed note cards as title-cover records", () => {
   assert.equal(notes[0].text, undefined);
   assert.equal(notes[0].comments, undefined);
   assert.equal(notes[0].statuses.cardOnly, true);
+});
+
+test("extracts collect page notes in exact array order", () => {
+  const payload = {
+    data: {
+      notes: [
+        { note_id: "collect1", display_title: "收藏一", cover: { url_default: "https://img.example/1.jpg" }, xsec_token: "token1" },
+        { note_id: "collect2", display_title: "收藏二", cover: { url_default: "https://img.example/2.jpg" }, xsec_token: "token2" }
+      ],
+      cursor: "collect2"
+    }
+  };
+  const result = extractCollectionPageNotes(payload, "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page");
+  assert.equal(result.responseCursor, "collect2");
+  assert.deepEqual(result.notes.map((note) => note.noteId), ["collect1", "collect2"]);
+  assert.equal(result.notes[0].title, "收藏一");
+  assert.equal(result.notes[0].cover, "https://img.example/1.jpg");
 });
 
 test("ignores detail text and comments from note-like payload", () => {

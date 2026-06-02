@@ -16,6 +16,18 @@
     return dedupeNotes(notes);
   }
 
+  function extractCollectionPageNotes(payload, sourceUrl) {
+    const notes = payload && payload.data && Array.isArray(payload.data.notes)
+      ? payload.data.notes
+        .map((item) => normalizeJsonNote(item, sourceUrl))
+        .filter((note) => note && note.noteId)
+      : [];
+    return {
+      notes: dedupeNotes(notes),
+      responseCursor: pickString(payload && payload.data && payload.data.cursor)
+    };
+  }
+
   function normalizeJsonNote(node, sourceUrl) {
     if (!node || typeof node !== "object") return null;
     if (isCommentOnlyContainer(node)) return null;
@@ -238,6 +250,7 @@
   }
 
   return {
+    extractCollectionPageNotes,
     extractNotesFromJsonPayload,
     normalizeJsonNote,
     collectUrls,

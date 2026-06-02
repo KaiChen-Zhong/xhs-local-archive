@@ -14,6 +14,8 @@
     lastScrollHeight: 0,
     discoverySeq: 0,
     fallbackNetworkSeq: 0,
+    collectionPages: new Map(),
+    collectionPageSeq: 0,
     scrollTarget: null,
     bridgeInjected: false,
     collectionEnabled: false,
@@ -151,6 +153,7 @@
       const remembered = rememberNote(note);
       if (remembered) changed.push(remembered);
     }
+    changed.push(...recomputeCollectionOrder());
     if (changed.length) {
       if (STATE.scanActive) STATE.newNotesThisScan += changed.filter((note) => note.statuses && note.statuses.firstSeenThisScan).length;
       STATE.lastNewAt = Date.now();
@@ -165,14 +168,17 @@
     const existing = STATE.known.get(note.noteId);
     const incomingIsApi = Boolean(note.statuses && note.statuses.apiOrdered);
     const existingIsApi = Boolean(existing && existing.statuses && existing.statuses.apiOrdered);
+    const incomingIsCollection = Boolean(note.statuses && note.statuses.collectionOrdered);
+    const existingIsCollection = Boolean(existing && existing.statuses && existing.statuses.collectionOrdered);
     const incomingIsVisual = isVisualCardSource(note.source);
     const existingIsVisual = Boolean(existing && existing.statuses && existing.statuses.visualOrdered);
     const incomingIndex = Number(note.discoveryIndex);
     const existingIndex = existing ? Number(existing.discoveryIndex) : Number.NaN;
     const shouldUseIncomingOrder = !existing ||
       !Number.isFinite(existing.discoveryIndex) ||
+      (incomingIsCollection && Number.isFinite(incomingIndex)) ||
       (incomingIsApi && !existingIsApi) ||
-      (incomingIsApi && existingIsApi && Number.isFinite(incomingIndex) && Number.isFinite(existingIndex) && incomingIndex < existingIndex) ||
+      (incomingIsApi && existingIsApi && !existingIsCollection && Number.isFinite(incomingIndex) && Number.isFinite(existingIndex) && incomingIndex < existingIndex) ||
       (incomingIsVisual && !existingIsApi && !existingIsVisual);
     const discoveryIndex = shouldUseIncomingOrder
       ? Number.isFinite(incomingIndex) ? incomingIndex : STATE.discoverySeq++
@@ -190,6 +196,7 @@
         ...(existing && existing.statuses || {}),
         ...(note.statuses || {}),
         apiOrdered: existingIsApi || incomingIsApi,
+        collectionOrdered: existingIsCollection || incomingIsCollection,
         visualOrdered: existingIsVisual || incomingIsVisual,
         firstSeenThisScan: !existing
       }
@@ -202,6 +209,7 @@
       merged.author !== (existing.author || "") ||
       merged.discoveryIndex !== existing.discoveryIndex ||
       Boolean(merged.statuses.apiOrdered) !== existingIsApi ||
+      Boolean(merged.statuses.collectionOrdered) !== existingIsCollection ||
       Boolean(merged.statuses.visualOrdered) !== existingIsVisual;
     if (!changed) return null;
     STATE.known.set(note.noteId, merged);
@@ -237,7 +245,49 @@
       "[onclick*='/explore/']",
       "[onclick*='/discovery/item/']"
     ];
+    const sectionOrdered = profileFavoriteSectionCandidates(selectors);
+    if (sectionOrdered.length) return sectionOrdered;
     return sortCardCandidates(Array.from(new Set(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).filter(hasCardUrl)))));
+  }
+
+  function profileFavoriteSectionCandidates(selectors) {
+    if (pageType() !== "profile-favorites") return [];
+    const sections = Array.from(document.querySelectorAll && document.querySelectorAll("section") || []);
+    if (!sections.length) return [];
+    const result = [];
+    const seen = new Set();
+    for (const section of sections) {
+      const candidates = Array.from(new Set(selectors.flatMap((selector) => Array.from(section.querySelectorAll && section.querySelectorAll(selector) || []))))
+        .filter(hasCardUrl)
+        .sort((a, b) => cardCandidateScore(b) - cardCandidateScore(a));
+      if (hasCardUrl(section)) candidates.push(section);
+      for (const candidate of candidates) {
+        const id = noteIdFromCardNode(candidate);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        result.push(candidate);
+        break;
+      }
+    }
+    return result;
+  }
+
+  function cardCandidateScore(node) {
+    const url = extractCardUrl(node);
+    let score = 0;
+    if (/\/user\/profile\/[^/]+\/[A-Za-z0-9]/.test(url)) score += 100;
+    if (/\/explore\/|\/discovery\/item\//.test(url)) score += 50;
+    if (/[?&]xsec_token=/.test(url)) score += 20;
+    if (visualPosition(node).visible) score += 1;
+    return score;
+  }
+
+  function noteIdFromCardNode(node) {
+    try {
+      return extractNoteId(new URL(extractCardUrl(node), location.href).toString());
+    } catch {
+      return "";
+    }
   }
 
   function sortCardCandidates(candidates) {
@@ -491,6 +541,21 @@
     if (/comment/i.test(url)) {
       return;
     }
+    const collectionPage = parseCollectionPagePayload(url, json);
+    if (collectionPage && collectionPage.notes.length) {
+      const notes = applyCollectionPage(collectionPage.notes, {
+        anchor: collectionPage.requestCursor,
+        responseCursor: collectionPage.responseCursor,
+        sourceUrl: url
+      });
+      if (notes.length) {
+        if (STATE.scanActive) STATE.newNotesThisScan += notes.length;
+        STATE.lastNewAt = Date.now();
+        STATE.stableRounds = 0;
+        chrome.runtime.sendMessage({ type: "notesDiscovered", notes }).catch(() => {});
+      }
+      return;
+    }
     const rawNotes = globalThis.XhsExtractors.extractNotesFromJsonPayload(json, url);
     const authoritative = isAuthoritativeCollectionPayload(url, rawNotes);
     const baseOrder = authoritative ? networkOrderBase(meta) : 0;
@@ -505,6 +570,133 @@
       STATE.stableRounds = 0;
       chrome.runtime.sendMessage({ type: "notesDiscovered", notes }).catch(() => {});
     }
+  }
+
+  function parseCollectionPagePayload(url, json) {
+    const text = String(url || "");
+    if (!/\/api\/sns\/web\/v\d+\/note\/collect\/page/i.test(text)) return null;
+    const parsed = globalThis.XhsExtractors.extractCollectionPageNotes(json, url);
+    return {
+      notes: parsed.notes,
+      responseCursor: parsed.responseCursor,
+      requestCursor: requestCursorFromUrl(url)
+    };
+  }
+
+  function requestCursorFromUrl(url) {
+    try {
+      return new URL(url, location.href).searchParams.get("cursor") || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function applyCollectionPage(rawNotes, meta = {}) {
+    const anchor = String(meta.anchor || "");
+    const ids = [];
+    const changed = [];
+    for (const note of rawNotes) {
+      if (!note || !note.noteId || ids.includes(note.noteId)) continue;
+      ids.push(note.noteId);
+      const remembered = rememberNote(cardOnlyNote(note, undefined, {
+        collectionOrdered: true,
+        collectionAnchor: anchor
+      }));
+      if (remembered) changed.push(remembered);
+    }
+    if (!ids.length) return changed.map(stripRuntimeFlags);
+    const previous = STATE.collectionPages.get(anchor);
+    const samePage = previous && previous.ids.join("\u0000") === ids.join("\u0000");
+    if (!samePage) {
+      STATE.collectionPages.set(anchor, {
+        ids,
+        responseCursor: String(meta.responseCursor || ""),
+        seq: ++STATE.collectionPageSeq
+      });
+    }
+    changed.push(...recomputeCollectionOrder());
+    return dedupeChangedNotes(changed).map(stripRuntimeFlags);
+  }
+
+  function recomputeCollectionOrder() {
+    if (!STATE.collectionPages || !STATE.collectionPages.size) return [];
+    const chain = collectionOrderChain();
+    const changed = [];
+    chain.forEach((noteId, index) => {
+      const existing = STATE.known.get(noteId);
+      if (!existing) return;
+      const updated = rememberNote({
+        ...existing,
+        noteId,
+        discoveryIndex: index,
+        source: existing.source || "collection-order",
+        statuses: {
+          ...(existing.statuses || {}),
+          discovered: true,
+          cardOnly: true,
+          apiOrdered: true,
+          collectionOrdered: true
+        }
+      });
+      if (updated) changed.push(updated);
+    });
+    return changed;
+  }
+
+  function collectionOrderChain() {
+    const result = [];
+    const seen = new Set();
+    const insertedPages = new Set();
+    const pageChildIds = new Set();
+    for (const page of STATE.collectionPages.values()) {
+      for (const id of page.ids || []) pageChildIds.add(id);
+    }
+    const appendId = (id) => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      result.push(id);
+      appendPage(id);
+    };
+    const appendPage = (anchor) => {
+      if (insertedPages.has(anchor)) return;
+      const page = STATE.collectionPages.get(anchor);
+      if (!page) return;
+      insertedPages.add(anchor);
+      for (const id of page.ids || []) appendId(id);
+    };
+    if (STATE.collectionPages.has("")) {
+      appendPage("");
+    } else {
+      for (const note of knownNotesByCurrentOrder()) {
+        if (pageChildIds.has(note.noteId)) continue;
+        appendId(note.noteId);
+      }
+    }
+    for (const [anchor, page] of Array.from(STATE.collectionPages.entries()).sort((a, b) => (a[1].seq || 0) - (b[1].seq || 0))) {
+      if (insertedPages.has(anchor)) continue;
+      if (anchor && !seen.has(anchor)) continue;
+      appendPage(anchor);
+      for (const id of page.ids || []) appendId(id);
+    }
+    return result;
+  }
+
+  function knownNotesByCurrentOrder() {
+    return Array.from(STATE.known.values()).sort((a, b) => {
+      const aIndex = Number(a.discoveryIndex);
+      const bIndex = Number(b.discoveryIndex);
+      if (Number.isFinite(aIndex) && Number.isFinite(bIndex) && aIndex !== bIndex) return aIndex - bIndex;
+      if (Number.isFinite(aIndex) !== Number.isFinite(bIndex)) return Number.isFinite(aIndex) ? -1 : 1;
+      return String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.noteId || "").localeCompare(String(b.noteId || ""));
+    });
+  }
+
+  function dedupeChangedNotes(notes) {
+    const byId = new Map();
+    for (const note of notes) {
+      if (note && note.noteId) byId.set(note.noteId, note);
+    }
+    return Array.from(byId.values());
   }
 
   function networkOrderBase(meta = {}) {
@@ -522,7 +714,7 @@
     return /collect|favorite|fav|like/.test(text);
   }
 
-  function cardOnlyNote(note, orderIndex) {
+  function cardOnlyNote(note, orderIndex, statusOverrides = {}) {
     const apiOrdered = Number.isFinite(Number(orderIndex));
     return {
       noteId: note.noteId,
@@ -533,7 +725,7 @@
       xsecToken: note.xsecToken,
       discoveryIndex: apiOrdered ? Number(orderIndex) : undefined,
       source: note.source,
-      statuses: { discovered: true, cardOnly: true, apiOrdered },
+      statuses: { discovered: true, cardOnly: true, apiOrdered, ...statusOverrides },
       createdAt: note.createdAt
     };
   }
@@ -573,6 +765,9 @@
     STATE.known = new Map();
     STATE.embeddedFingerprints = new Set();
     STATE.discoverySeq = 0;
+    STATE.fallbackNetworkSeq = 0;
+    STATE.collectionPages = new Map();
+    STATE.collectionPageSeq = 0;
     STATE.lastKnownCount = 0;
     STATE.newNotesThisScan = 0;
     STATE.stableRounds = 0;

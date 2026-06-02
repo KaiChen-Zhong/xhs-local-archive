@@ -124,7 +124,11 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(contentScript, /function pageType\(\)/);
   assert.match(contentScript, /profile-favorites/);
   assert.doesNotMatch(contentScript, /const notes = captureVisibleCards\("manual"\)/);
-  assert.match(contentScript, /function cardOnlyNote\(note,\s*orderIndex\)/);
+  assert.match(contentScript, /function cardOnlyNote\(note,\s*orderIndex,\s*statusOverrides = \{\}\)/);
+  assert.match(contentScript, /parseCollectionPagePayload/);
+  assert.match(contentScript, /requestCursorFromUrl/);
+  assert.match(contentScript, /collectionOrderChain/);
+  assert.match(contentScript, /collectionOrdered/);
   assert.doesNotMatch(contentScript, /currentDetailContext/);
   assert.match(contentScript, /type === "enableNetworkCapture"/);
   assert.match(contentScript, /count:\s*0,\s*reason:\s*safetyStop/);
