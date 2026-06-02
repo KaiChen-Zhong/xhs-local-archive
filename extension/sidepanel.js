@@ -117,6 +117,7 @@ function describeResponse(payload, response) {
     const path = parsePath(ai.categoryPath || []);
     if (ai.providerError) return `AI 异常，已用本地规则：${ai.providerError}`;
     if (ai.taxonomyPending && proposed.length) return `AI 分类待审：${proposed.join(" / ")}`;
+    if (ai.aiPipeline && ai.aiPipeline.mode === "dual") return `AI 融合分类完成：${(path.length ? path : ["未分类", "待细分"]).join(" / ")}`;
     return `${ai.visionFallback ? "AI 分类完成（封面图像降级为链接）" : "AI 分类完成"}：${(path.length ? path : ["未分类", "待细分"]).join(" / ")}`;
   }
   if (payload.type === "updateClassification") return "分类已保存";

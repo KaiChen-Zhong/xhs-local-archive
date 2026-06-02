@@ -271,9 +271,11 @@ test("native host retries AI classification without image content when provider 
       type: "saveSettings",
       settings: {
         ai: {
-          baseUrl: `http://127.0.0.1:${port}/v1`,
-          model: "mock-model",
-          apiKey: "mock-key"
+          vision: {
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            model: "mock-model",
+            apiKey: "mock-key"
+          }
         }
       }
     });
@@ -291,6 +293,90 @@ test("native host retries AI classification without image content when provider 
     assert.deepEqual(classified.note.ai.proposedCategoryPath, ["美食", "咖啡甜品"]);
     assert.equal(classified.note.ai.taxonomyPending, true);
     assert.equal(classified.note.ai.visionFallback, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  }
+});
+
+test("native host combines text and vision AI before governing classification", async () => {
+  const calls = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const parsed = JSON.parse(body);
+      calls.push({ model: parsed.model, hasImage: body.includes("image_url"), isFusion: body.includes("text_ai_analysis") });
+      const categoryPath = body.includes("text_ai_analysis")
+        ? ["美食", "咖啡甜品"]
+        : parsed.model === "vision-model"
+          ? ["美食", "咖啡视觉"]
+          : ["美食", "咖啡文本"];
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                categoryPath,
+                tags: ["咖啡"],
+                summary: `${parsed.model} summary`,
+                highlights: "dual ai",
+                confidence: 0.8,
+                filename: "dual-ai"
+              })
+            }
+          }
+        ]
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = server.address().port;
+    await handleMessage({
+      type: "saveSettings",
+      settings: {
+        ai: {
+          text: {
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            model: "text-model",
+            apiKey: "text-key"
+          },
+          vision: {
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            model: "vision-model",
+            apiKey: "vision-key"
+          }
+        }
+      }
+    });
+    const seed = {
+      noteId: `dual-seed-${Date.now()}`,
+      title: "咖啡分类种子",
+      url: "https://www.xiaohongshu.com/explore/dual-seed"
+    };
+    const note = {
+      noteId: `dual-ai-${Date.now()}`,
+      title: "咖啡店收藏",
+      cover: "https://img.example/coffee.jpg",
+      url: "https://www.xiaohongshu.com/explore/dual-ai"
+    };
+    assert.equal((await handleMessage({ type: "upsertNotes", notes: [seed, note] })).ok, true);
+    assert.equal((await handleMessage({
+      type: "updateClassification",
+      noteId: seed.noteId,
+      classification: { categoryPath: ["美食", "咖啡甜品"] }
+    })).ok, true);
+    const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
+    assert.equal(classified.ok, true);
+    assert.deepEqual(classified.note.ai.categoryPath, ["美食", "咖啡甜品"]);
+    assert.equal(classified.note.ai.aiPipeline.mode, "dual");
+    assert.equal(calls.length, 3);
+    assert.equal(calls.some((call) => call.model === "vision-model" && call.hasImage), true);
+    assert.equal(calls.some((call) => call.model === "text-model" && call.isFusion), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });

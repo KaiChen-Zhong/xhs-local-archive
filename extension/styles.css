@@ -644,6 +644,19 @@ pre {
   padding: 24px;
 }
 
+.settingsGroup {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.settingsGroup h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
 label {
   display: grid;
   gap: 6px;

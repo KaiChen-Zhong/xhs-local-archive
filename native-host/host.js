@@ -1192,18 +1192,22 @@ function inferTaxonomy(note) {
 }
 
 async function buildAi(note, settings = {}, taxonomy = null) {
-  let ai;
-  try {
-    ai = runtimeAiSettings(settings);
-  } catch (error) {
-    return {
-      ...buildLocalAiFallback(note),
-      providerError: error.message
-    };
+  const errors = [];
+  const textAi = readRuntimeAiSettings(settings, "text", errors);
+  const visionAi = readRuntimeAiSettings(settings, "vision", errors);
+  if (!isAiConfigured(textAi) && !isAiConfigured(visionAi)) {
+    const fallback = buildLocalAiFallback(note);
+    if (errors.length) fallback.providerError = errors.join("; ");
+    return fallback;
   }
-  if (!ai.apiKey || !ai.baseUrl || !ai.model) return buildLocalAiFallback(note);
   try {
-    return await callOpenAiCompatible(note, ai, taxonomy);
+    if (isAiConfigured(textAi) && isAiConfigured(visionAi)) {
+      return await callDualAiCompatible(note, textAi, visionAi, taxonomy);
+    }
+    if (isAiConfigured(visionAi)) {
+      return await callOpenAiCompatible(note, visionAi, taxonomy, { useImage: true, role: "vision" });
+    }
+    return await callOpenAiCompatible(note, textAi, taxonomy, { useImage: false, role: "text" });
   } catch (error) {
     return {
       ...buildLocalAiFallback(note),
@@ -1213,17 +1217,13 @@ async function buildAi(note, settings = {}, taxonomy = null) {
 }
 
 async function testAiProvider(settings = {}) {
-  let ai;
-  try {
-    ai = runtimeAiSettings(settings);
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-  if (!ai.apiKey || !ai.baseUrl || !ai.model) {
+  const errors = [];
+  const textAi = readRuntimeAiSettings(settings, "text", errors);
+  const visionAi = readRuntimeAiSettings(settings, "vision", errors);
+  if (!isAiConfigured(textAi) && !isAiConfigured(visionAi)) {
     return { ok: false, error: "ai_settings_incomplete" };
   }
-  try {
-    const result = await callOpenAiCompatible({
+  const probe = {
       noteId: "provider-test",
       title: "AI provider test",
       author: "",
@@ -1231,7 +1231,25 @@ async function testAiProvider(settings = {}) {
       comments: [],
       images: [],
       videos: []
-    }, ai);
+    };
+  const text = isAiConfigured(textAi) ? await testSingleAiProvider(probe, textAi, "text") : { ok: false, error: "not_configured" };
+  const vision = isAiConfigured(visionAi) ? await testSingleAiProvider(probe, visionAi, "vision") : { ok: false, error: "not_configured" };
+  const primary = text.ok ? text : vision;
+  if (!primary.ok) return { ok: false, error: primary.error || errors.join("; ") || "ai_test_failed", text, vision };
+  return {
+    ok: true,
+    model: primary.model,
+    category: primary.category,
+    summary: primary.summary,
+    filename: primary.filename,
+    text,
+    vision
+  };
+}
+
+async function testSingleAiProvider(note, ai, role) {
+  try {
+    const result = await callOpenAiCompatible(note, ai, null, { useImage: false, role });
     return {
       ok: true,
       model: ai.model,
@@ -1247,50 +1265,116 @@ async function testAiProvider(settings = {}) {
 function protectStoredSettings(existing = {}, incoming = {}, clearAiKey = false) {
   const oldAi = existing.ai || {};
   const incomingAi = incoming.ai || {};
+  const hasLegacyIncoming = Object.prototype.hasOwnProperty.call(incomingAi, "baseUrl") ||
+    Object.prototype.hasOwnProperty.call(incomingAi, "model") ||
+    Object.prototype.hasOwnProperty.call(incomingAi, "apiKey");
+  const legacyIncoming = hasLegacyIncoming ? protectAiSlot(oldAi, incomingAi, clearAiKey) : null;
+  const nextAi = {
+    ...oldAi,
+    ...incomingAi,
+    text: hasLegacyIncoming && !incomingAi.text ? legacyIncoming : protectAiSlot(oldAi.text || legacyAiSlot(oldAi), incomingAi.text || {}, clearAiKey),
+    vision: protectAiSlot(oldAi.vision || {}, incomingAi.vision || {}, clearAiKey)
+  };
   const settings = {
     ...existing,
     ...incoming,
-    ai: {
-      ...oldAi,
-      ...incomingAi
-    }
+    ai: nextAi
   };
-  const suppliedKey = Object.prototype.hasOwnProperty.call(incomingAi, "apiKey")
-    ? String(incomingAi.apiKey || "").trim()
-    : "";
-  delete settings.ai.apiKey;
-  if (clearAiKey) {
-    delete settings.ai.apiKeyProtected;
-  } else if (suppliedKey) {
-    settings.ai.apiKeyProtected = protectSecret(suppliedKey);
-  } else if (!settings.ai.apiKeyProtected && oldAi.apiKey) {
-    settings.ai.apiKeyProtected = protectSecret(String(oldAi.apiKey));
+  if (legacyIncoming) {
+    settings.ai.baseUrl = legacyIncoming.baseUrl;
+    settings.ai.model = legacyIncoming.model;
+    if (legacyIncoming.apiKeyProtected) settings.ai.apiKeyProtected = legacyIncoming.apiKeyProtected;
+    else delete settings.ai.apiKeyProtected;
   }
+  delete settings.ai.apiKey;
+  delete settings.ai.text.apiKey;
+  delete settings.ai.vision.apiKey;
   return settings;
 }
 
 function publicSettings(settings = {}) {
   const ai = settings.ai || {};
+  const text = aiSlotHasConfig(ai.text) ? ai.text : legacyAiSlot(ai);
+  const vision = ai.vision || {};
   return {
     ...settings,
     ai: {
       baseUrl: ai.baseUrl || "",
       model: ai.model || "",
-      apiKeyConfigured: Boolean(ai.apiKeyProtected || ai.apiKey || process.env.XHS_AI_API_KEY)
+      apiKeyConfigured: Boolean(ai.apiKeyProtected || ai.apiKey || process.env.XHS_AI_API_KEY),
+      text: publicAiSlot(text, "text"),
+      vision: publicAiSlot(vision, "vision")
     }
   };
 }
 
-function runtimeAiSettings(settings = {}) {
-  const ai = settings.ai || {};
-  let apiKey = process.env.XHS_AI_API_KEY || "";
-  if (!apiKey && ai.apiKeyProtected) apiKey = unprotectSecret(ai.apiKeyProtected);
-  if (!apiKey && ai.apiKey) apiKey = String(ai.apiKey);
+function protectAiSlot(oldSlot = {}, incomingSlot = {}, clearAiKey = false) {
+  const slot = {
+    ...oldSlot,
+    ...incomingSlot
+  };
+  const suppliedKey = Object.prototype.hasOwnProperty.call(incomingSlot, "apiKey")
+    ? String(incomingSlot.apiKey || "").trim()
+    : "";
+  delete slot.apiKey;
+  if (clearAiKey) {
+    delete slot.apiKeyProtected;
+  } else if (suppliedKey) {
+    slot.apiKeyProtected = protectSecret(suppliedKey);
+  } else if (!slot.apiKeyProtected && oldSlot.apiKey) {
+    slot.apiKeyProtected = protectSecret(String(oldSlot.apiKey));
+  }
+  return slot;
+}
+
+function publicAiSlot(slot = {}, role = "text") {
+  const envName = role === "vision" ? "XHS_VISION_AI_API_KEY" : "XHS_TEXT_AI_API_KEY";
+  return {
+    baseUrl: slot.baseUrl || "",
+    model: slot.model || "",
+    apiKeyConfigured: Boolean(slot.apiKeyProtected || slot.apiKey || process.env[envName] || (role === "text" && process.env.XHS_AI_API_KEY))
+  };
+}
+
+function legacyAiSlot(ai = {}) {
   return {
     baseUrl: ai.baseUrl || "",
     model: ai.model || "",
-    apiKey
+    apiKey: ai.apiKey || "",
+    apiKeyProtected: ai.apiKeyProtected || ""
   };
+}
+
+function readRuntimeAiSettings(settings = {}, role = "text", errors = []) {
+  try {
+    return runtimeAiSettings(settings, role);
+  } catch (error) {
+    errors.push(`${role}:${error.message}`);
+    return { baseUrl: "", model: "", apiKey: "" };
+  }
+}
+
+function runtimeAiSettings(settings = {}, role = "text") {
+  const ai = settings.ai || {};
+  const slot = role === "vision" ? ai.vision || {} : aiSlotHasConfig(ai.text) ? ai.text : legacyAiSlot(ai);
+  const envName = role === "vision" ? "XHS_VISION_AI_API_KEY" : "XHS_TEXT_AI_API_KEY";
+  let apiKey = process.env[envName] || (role === "text" ? process.env.XHS_AI_API_KEY || "" : "");
+  if (!apiKey && slot.apiKeyProtected) apiKey = unprotectSecret(slot.apiKeyProtected);
+  if (!apiKey && slot.apiKey) apiKey = String(slot.apiKey);
+  return {
+    baseUrl: slot.baseUrl || "",
+    model: slot.model || "",
+    apiKey,
+    role
+  };
+}
+
+function isAiConfigured(ai) {
+  return Boolean(ai && ai.apiKey && ai.baseUrl && ai.model);
+}
+
+function aiSlotHasConfig(slot = {}) {
+  return Boolean(slot && (slot.baseUrl || slot.model || slot.apiKey || slot.apiKeyProtected));
 }
 
 function protectSecret(secret) {
@@ -1387,8 +1471,86 @@ function portableSecretKey() {
   }
 }
 
-async function callOpenAiCompatible(note, ai, taxonomy = null) {
+async function callDualAiCompatible(note, textAi, visionAi, taxonomy = null) {
+  const text = await callAiAnalyzer(note, textAi, taxonomy, { role: "text", useImage: false }).catch((error) => ({ ok: false, error: error.message }));
+  const vision = await callAiAnalyzer(note, visionAi, taxonomy, { role: "vision", useImage: true }).catch((error) => ({ ok: false, error: error.message }));
+  if (!text.ok && !vision.ok) throw new Error(`text:${text.error || "failed"}; vision:${vision.error || "failed"}`);
+  const fusionAi = text.ok ? textAi : visionAi;
+  try {
+    const fused = await callAiFusion(note, fusionAi, taxonomy, { text, vision });
+    return {
+      ...fused,
+      aiPipeline: {
+        mode: "dual",
+        text: summarizeAiStage(text),
+        vision: summarizeAiStage(vision)
+      }
+    };
+  } catch (error) {
+    const fallback = text.ok ? text.result : vision.result;
+    return {
+      ...classificationFromParsed(fallback, note),
+      source: "ai",
+      fusionError: error.message,
+      aiPipeline: {
+        mode: "dual_fallback",
+        text: summarizeAiStage(text),
+        vision: summarizeAiStage(vision)
+      }
+    };
+  }
+}
+
+async function callAiAnalyzer(note, ai, taxonomy = null, options = {}) {
+  const prompt = buildAiPrompt(note, taxonomy, [
+    options.role === "vision"
+      ? "你负责封面视觉分析。重点识别封面里的场景、物品、人物风格、文字元素和视觉用途。"
+      : "你负责标题文本分析。重点识别标题语义、主题、用途、地点、对象和可能分类。",
+    "返回严格 JSON：categoryPath, proposedCategoryPath, tags, summary, highlights, confidence, evidence。"
+  ]);
+  const parsed = await fetchAiJsonWithOptionalImage(note, ai, prompt, { useImage: Boolean(options.useImage) });
+  return { ok: true, result: parsed, role: options.role || ai.role || "ai" };
+}
+
+async function callAiFusion(note, ai, taxonomy = null, stages = {}) {
+  const prompt = buildAiPrompt(note, taxonomy, [
+    "你是最终分类裁决器。综合 text_ai_analysis 与 vision_ai_analysis 后再分类。",
+    "若文字与视觉冲突，优先选择能解释标题和封面的共同主题；若只有一路可用，使用可用一路。",
+    "仍然必须逐层复用受控 taxonomy 节点；新增路径放 proposedCategoryPath。",
+    "返回严格 JSON：categoryPath, proposedCategoryPath, tags, summary, highlights, confidence, evidence, filename。",
+    JSON.stringify({
+      text_ai_analysis: stages.text && stages.text.ok ? stages.text.result : { error: stages.text && stages.text.error || "not_available" },
+      vision_ai_analysis: stages.vision && stages.vision.ok ? stages.vision.result : { error: stages.vision && stages.vision.error || "not_available" }
+    })
+  ]);
+  const parsed = await fetchAiJsonWithOptionalImage(note, ai, prompt, { useImage: false });
+  return classificationFromParsed(parsed, note);
+}
+
+function summarizeAiStage(stage = {}) {
+  if (!stage.ok) return { ok: false, error: stage.error || "failed" };
+  const result = stage.result || {};
+  return {
+    ok: true,
+    role: stage.role || "",
+    categoryPath: normalizeCategoryPath(result.proposedCategoryPath || result.categoryPath || [result.category, result.subcategory]),
+    confidence: result.confidence || ""
+  };
+}
+
+async function callOpenAiCompatible(note, ai, taxonomy = null, options = {}) {
   const endpoint = `${String(ai.baseUrl).replace(/\/+$/, "")}/chat/completions`;
+  const prompt = buildAiPrompt(note, taxonomy, [
+    options.role === "vision"
+      ? "你是小红书收藏多模态分类助手。根据标题和封面分类，不读取、不推断正文、评论或隐藏内容。"
+      : "你是小红书收藏文本分类助手。根据标题、作者和封面链接文本分类，不读取、不推断正文、评论或隐藏内容。",
+    "返回严格 JSON：categoryPath, proposedCategoryPath, tags, summary, highlights, filename。"
+  ]);
+  const parsed = await fetchAiJsonWithOptionalImage(note, ai, prompt, { useImage: options.useImage !== false });
+  return classificationFromParsed(parsed, note);
+}
+
+function buildAiPrompt(note, taxonomy = null, lines = []) {
   const publicTax = taxonomy ? publicTaxonomy({ notes: {}, taxonomy }) : null;
   const controlledNodes = publicTax && Array.isArray(publicTax.nodes)
     ? publicTax.nodes
@@ -1406,20 +1568,25 @@ async function callOpenAiCompatible(note, ai, taxonomy = null) {
         count: node.count || 0
       }))
     : [];
-  const prompt = [
-    "你是小红书收藏分类助手。只根据标题和封面分类，不读取、不推断正文、评论或隐藏内容。",
+  return [
+    ...lines,
     "已有分类是受控 taxonomy tree，像“界/门/纲/目/科”逐层选择。每一层必须先在当前父节点下复用已有 name，尤其 locked=true 节点。",
     "若某一层没有合适子节点，不要伪造已提交分类；返回 proposedCategoryPath 表示建议新增路径，同时 categoryPath 使用最接近的已有父路径。",
-    "最多五层。返回严格 JSON：categoryPath, proposedCategoryPath, tags, summary, highlights, filename。",
+    "最多五层。",
     JSON.stringify({
       title: note.title,
+      author: note.author || "",
       cover: note.cover || (note.images || [])[0] || "",
       source_url: note.url || "",
       controlled_taxonomy_nodes: controlledNodes
     })
   ].join("\n\n");
+}
+
+async function fetchAiJsonWithOptionalImage(note, ai, prompt, options = {}) {
+  const endpoint = `${String(ai.baseUrl).replace(/\/+$/, "")}/chat/completions`;
   const coverUrl = note.cover || (note.images || [])[0] || "";
-  const hasImageContent = /^https?:\/\//.test(coverUrl);
+  const hasImageContent = options.useImage !== false && /^https?:\/\//.test(coverUrl);
   const userContent = hasImageContent
     ? [
         { type: "text", text: prompt },
@@ -1437,6 +1604,11 @@ async function callOpenAiCompatible(note, ai, taxonomy = null) {
   const content = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
   if (!content) throw new Error("ai_empty_content");
   const parsed = JSON.parse(content);
+  if (visionFallback) parsed.visionFallback = true;
+  return parsed;
+}
+
+function classificationFromParsed(parsed, note) {
   const summary = normalizeAiText(parsed.summary);
   const highlights = normalizeAiText(parsed.highlights);
   const filename = normalizeAiText(parsed.filename);
@@ -1450,7 +1622,7 @@ async function callOpenAiCompatible(note, ai, taxonomy = null) {
     highlights,
     filename: sanitizeFilename(filename || summarizeForFilename(note), "xhs-note"),
     source: "ai",
-    visionFallback
+    visionFallback: Boolean(parsed.visionFallback)
   };
 }
 

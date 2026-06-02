@@ -16,7 +16,7 @@
 
 - 从可见 DOM 卡片和用户触发后的页面网络响应中发现收藏/点赞卡片。
 - 分类只使用卡片标题和可见封面。
-- 支持 AI 生成五层以内分类路径。
+- 支持文本 AI、多模态 AI，二者都配置时先分别分析标题与封面，再融合裁决五层以内分类路径。
 - 受控 taxonomy tree：每层都是受管节点，最多五层。
 - AI 必须逐层复用已有子节点；新 AI 路径进入待审，人工批准后才正式入库。
 - 支持待审分类批准、拒绝、合并、锁定。
@@ -52,7 +52,7 @@ See [SAFETY.md](SAFETY.md) for platform-safety boundaries.
 3. Open Xiaohongshu favorites or likes page while logged in.
 4. Click `受控扫描`.
 5. Wait until scan stops with `complete`, or stop immediately if access warnings appear. Access-limited or verification stops lock collection actions for 15 minutes.
-6. Click `批量分类`; AI decides category paths up to five levels using only title and cover.
+6. Click `批量分类`; AI decides category paths up to five levels using only title and cover. If both text and vision AI are configured, text analysis and cover analysis are fused before taxonomy governance.
 7. Use `分类治理` to approve pending AI proposals, reject noisy paths, lock stable nodes, or merge duplicates such as `餐饮/咖啡馆` into `美食/咖啡甜品`.
 8. Drill into 大类/小类/更细分类 in the side panel waterfall view.
 9. Click `导出卡片`; batch export asks for confirmation, processes at most 10 records per click, and does not open Xiaohongshu pages.

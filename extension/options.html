@@ -9,19 +9,40 @@
   <body class="options">
     <main>
       <h1>设置</h1>
-      <p>AI 端点使用 OpenAI-compatible 协议。MiMo 或中转站若兼容该协议，可直接填写 base URL。</p>
-      <label>
-        Base URL
-        <input id="baseUrl" placeholder="https://api.example.com/v1">
-      </label>
-      <label>
-        Model
-        <input id="model" placeholder="gpt-4.1-mini">
-      </label>
-      <label>
-        API Key
-        <input id="apiKey" type="password" placeholder="sk-...">
-      </label>
+      <p>AI 端点使用 OpenAI-compatible 协议。文本 AI 负责标题语义，多模态 AI 负责封面视觉；两者都配置时会融合裁决。</p>
+
+      <section class="settingsGroup">
+        <h2>文本 AI</h2>
+        <label>
+          Base URL
+          <input id="textBaseUrl" placeholder="https://api.example.com/v1">
+        </label>
+        <label>
+          Model
+          <input id="textModel" placeholder="gpt-4.1-mini">
+        </label>
+        <label>
+          API Key
+          <input id="textApiKey" type="password" placeholder="sk-...">
+        </label>
+      </section>
+
+      <section class="settingsGroup">
+        <h2>多模态 AI</h2>
+        <label>
+          Base URL
+          <input id="visionBaseUrl" placeholder="https://api.example.com/v1">
+        </label>
+        <label>
+          Model
+          <input id="visionModel" placeholder="gpt-4o-mini">
+        </label>
+        <label>
+          API Key
+          <input id="visionApiKey" type="password" placeholder="sk-...">
+        </label>
+      </section>
+
       <button id="save">保存 AI 设置</button>
       <button id="testAi">测试 AI</button>
       <button id="clearAiKey">清除 API Key</button>
