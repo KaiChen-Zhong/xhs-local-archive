@@ -161,6 +161,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(serviceWorker, /slice\(0, ARCHIVE_ALL_LIMIT\)/);
   assert.match(serviceWorker, /await sleep\(ARCHIVE_ALL_DELAY_MS\)/);
   assert.match(serviceWorker, /archiveAll.*300000/s);
+  assert.doesNotMatch(serviceWorker, /limit:\s*CLASSIFY_ALL_LIMIT/);
+  assert.match(serviceWorker, /classifyAll.*12\s*\*\s*60\s*\*\s*60\s*\*\s*1000/s);
   assert.doesNotMatch(serviceWorker, /message\.type === "openHydrate"/);
   assert.doesNotMatch(serviceWorker, /checkHydrateOpenCooldown/);
   assert.doesNotMatch(serviceWorker, /hydrate_open_cooldown/);
@@ -188,6 +190,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(sidePanel, /手动采集：新增/);
   assert.match(sidePanel, /候选/);
   assert.match(sidePanel, /批量归档：/);
+  assert.match(sidePanel, /批量分类全部/);
+  assert.doesNotMatch(sidePanel, /最多 50/);
   assert.match(sidePanel, /activeCategoryPath/);
   assert.match(sidePanel, /categoryPath/);
   assert.doesNotMatch(sidePanel, /补全页面已打开/);

@@ -7,7 +7,6 @@ const HOST_NAME = "com.xhs_archive.host";
 const SCAN_COOLDOWN_MS = 30000;
 const ARCHIVE_ALL_LIMIT = 10;
 const ARCHIVE_ALL_DELAY_MS = 2000;
-const CLASSIFY_ALL_LIMIT = 50;
 const RISK_LOCK_MS = 15 * 60 * 1000;
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -91,14 +90,14 @@ async function handleMessage(message, sender) {
   }
 
   if (message.type === "classifyAll") {
-    const result = await sendNative({ type: "classifyAll", limit: CLASSIFY_ALL_LIMIT });
+    const result = await sendNative({ type: "classifyAll" });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
       if (native && native.ok) await upsertLocal(native.notes || []);
     }
     await appendEvent(result.ok ? "info" : "error", "classify_all", {
       ok: Boolean(result.ok),
-      count: (result.results || []).length,
+      count: Number.isFinite(result.processed) ? result.processed : (result.results || []).length,
       error: result.error || ""
     });
     return result;
@@ -513,7 +512,7 @@ function sendNative(payload) {
 function nativeTimeoutFor(type) {
   if (type === "archiveNote") return 180000;
   if (type === "archiveAll") return 300000;
-  if (type === "classifyAll") return 300000;
+  if (type === "classifyAll") return 12 * 60 * 60 * 1000;
   if (type === "classifyNote") return 60000;
   if (type === "mergeTaxonomy") return 60000;
   if (type === "testAiProvider") return 60000;

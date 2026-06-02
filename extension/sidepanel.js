@@ -44,12 +44,12 @@ document.getElementById("archiveAll").addEventListener("click", () => {
   send({ type: "archiveAll" });
 });
 document.getElementById("classifyAll").addEventListener("click", () => {
-  const count = currentNotes.filter((note) => !note.unavailableReason).length;
+  const count = currentNotes.filter((note) => !note.unavailableReason && needsAiClassification(note)).length;
   if (!count) {
     statusEl.textContent = "没有可分类条目";
     return;
   }
-  if (!confirm(`批量分类最多 50 条？AI 只按标题和封面判断五层以内分类路径。`)) return;
+  if (!confirm(`批量分类全部 ${count} 条待分类/异常条目？AI 只按标题和封面判断五层以内分类路径。`)) return;
   send({ type: "classifyAll" });
 });
 document.getElementById("exportAll").addEventListener("click", () => exportAll());
@@ -111,7 +111,10 @@ function describeResponse(payload, response) {
   }
   if (payload.type === "classifyAll") {
     const results = response.results || [];
-    return `批量分类：${results.filter((item) => item.ok).length}/${results.length} 成功`;
+    const processed = Number.isFinite(response.processed) ? response.processed : results.length;
+    const succeeded = Number.isFinite(response.succeeded) ? response.succeeded : results.filter((item) => item.ok).length;
+    const truncated = response.truncatedResults ? " / 明细已截断，列表已刷新" : "";
+    return `批量分类：${succeeded}/${processed} 成功${truncated}`;
   }
   if (payload.type === "classifyNote") {
     const ai = response.note && response.note.ai || {};
@@ -360,6 +363,16 @@ function classificationOf(note) {
     pending: Boolean(ai.taxonomyPending),
     error: ai.providerError || ""
   };
+}
+
+function needsAiClassification(note) {
+  const ai = note && note.ai || {};
+  if (!ai || !Object.keys(ai).length) return true;
+  if (ai.providerError) return true;
+  if (ai.source === "manual" || ai.source === "merge") return false;
+  if (ai.taxonomyPending) return false;
+  const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
+  return !path.length || path.join("/") === "未分类/待细分";
 }
 
 function classificationLabel(note, classification) {

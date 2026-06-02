@@ -25,9 +25,10 @@ const MEDIA_DOWNLOAD_DELAY_MS = parseEnvInt("XHS_MEDIA_DOWNLOAD_DELAY_MS", 800);
 const MEDIA_MAX_IMAGE_BYTES = parseEnvInt("XHS_MEDIA_MAX_IMAGE_BYTES", 50 * 1024 * 1024);
 const MEDIA_MAX_VIDEO_BYTES = parseEnvInt("XHS_MEDIA_MAX_VIDEO_BYTES", 300 * 1024 * 1024);
 const MEDIA_READ_MAX_BYTES = parseEnvInt("XHS_MEDIA_READ_MAX_BYTES", 25 * 1024 * 1024);
-const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 50);
+const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 0);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
 const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 5);
+const CLASSIFY_ALL_RESULT_DETAIL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_RESULT_DETAIL_LIMIT", 500);
 const TAXONOMY_LEVEL_NAMES = ["大类", "领域", "主题", "场景", "细项"];
 const DEFAULT_TAXONOMY_PATHS = [
   ["美食", "咖啡甜品"],
@@ -86,6 +87,13 @@ function writeJson(file, data) {
 function parseEnvInt(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function classifyAllLimit(requestedLimit) {
+  const requested = Number(requestedLimit);
+  if (Number.isFinite(requested) && requested > 0) return Math.floor(requested);
+  if (CLASSIFY_ALL_LIMIT > 0) return CLASSIFY_ALL_LIMIT;
+  return Number.POSITIVE_INFINITY;
 }
 
 function loadDb() {
@@ -200,14 +208,17 @@ async function handleMessage(message) {
   }
 
   if (type === "classifyAll") {
-    const limit = Math.max(1, Math.min(Number(message.limit) || CLASSIFY_ALL_LIMIT, CLASSIFY_ALL_LIMIT));
+    const limit = classifyAllLimit(message.limit);
     const concurrency = Math.max(1, Math.min(Number(message.concurrency) || CLASSIFY_ALL_CONCURRENCY || 1, 8));
-    const notes = Object.values(db.notes || {})
+    const candidates = Object.values(db.notes || {})
       .filter((note) => note.noteId && !note.unavailableReason)
       .filter((note) => message.force ? true : needsClassification(note))
-      .sort(compareNotesByDiscoveryOrder)
-      .slice(0, limit);
-    const results = new Array(notes.length);
+      .sort(compareNotesByDiscoveryOrder);
+    const notes = Number.isFinite(limit) ? candidates.slice(0, limit) : candidates;
+    const detailLimit = Math.max(0, CLASSIFY_ALL_RESULT_DETAIL_LIMIT);
+    const results = new Array(Math.min(notes.length, detailLimit));
+    let succeeded = 0;
+    let failed = 0;
     let cursor = 0;
     const worker = async () => {
       while (cursor < notes.length) {
@@ -221,16 +232,28 @@ async function handleMessage(message) {
           note.ai = { ...(note.ai || {}), ...governed };
           note.updatedAt = new Date().toISOString();
           db.notes[note.noteId] = note;
-          results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
+          succeeded += 1;
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
         } catch (error) {
-          results[index] = { noteId: note.noteId, ok: false, error: error.message };
+          failed += 1;
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: false, error: error.message };
         }
+        if ((succeeded + failed) % 50 === 0) saveDb(db);
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, notes.length) }, () => worker()));
-    logEvent(db, "info", "classify_all", { count: results.length, ok: results.filter((item) => item && item.ok).length, concurrency });
+    logEvent(db, "info", "classify_all", { count: notes.length, ok: succeeded, failed, concurrency, limited: Number.isFinite(limit) });
     saveDb(db);
-    return { ok: true, results };
+    return {
+      ok: true,
+      processed: notes.length,
+      succeeded,
+      failed,
+      totalCandidates: candidates.length,
+      limited: Number.isFinite(limit),
+      truncatedResults: notes.length > results.length,
+      results: results.filter(Boolean)
+    };
   }
 
   if (type === "updateClassification") {

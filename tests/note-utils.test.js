@@ -518,6 +518,57 @@ test("native host classifyAll advances past already classified notes", async () 
   assert.deepEqual(classified.results.map((item) => item.noteId), [notes[1].noteId, notes[2].noteId]);
 });
 
+test("native host classifyAll without limit processes every pending captured note", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  const prefix = `all-classify-${Date.now()}`;
+  const notes = [
+    {
+      noteId: `${prefix}-manual`,
+      title: "人工分类保留",
+      url: `https://www.xiaohongshu.com/explore/${prefix}manual`,
+      discoveryIndex: 0
+    },
+    {
+      noteId: `${prefix}-coffee`,
+      title: "咖啡甜品合集",
+      cover: "https://img.example/coffee.jpg",
+      url: `https://www.xiaohongshu.com/explore/${prefix}coffee`,
+      discoveryIndex: 1
+    },
+    {
+      noteId: `${prefix}-stocks`,
+      title: "美股基金投资",
+      cover: "https://img.example/stocks.jpg",
+      url: `https://www.xiaohongshu.com/explore/${prefix}stocks`,
+      discoveryIndex: 2
+    },
+    {
+      noteId: `${prefix}-career`,
+      title: "求职面试简历",
+      cover: "https://img.example/career.jpg",
+      url: `https://www.xiaohongshu.com/explore/${prefix}career`,
+      discoveryIndex: 3
+    }
+  ];
+  assert.equal((await handleMessage({ type: "upsertNotes", notes })).ok, true);
+  assert.equal((await handleMessage({
+    type: "updateClassification",
+    noteId: notes[0].noteId,
+    classification: { categoryPath: ["手动", "保留"] }
+  })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", concurrency: 2 });
+  assert.equal(classified.ok, true);
+  assert.equal(classified.processed, 3);
+  assert.equal(classified.succeeded, 3);
+  assert.equal(classified.failed, 0);
+  assert.equal(classified.limited, false);
+  assert.deepEqual(classified.results.map((item) => item.noteId), [notes[1].noteId, notes[2].noteId, notes[3].noteId]);
+  const archived = await handleMessage({ type: "archiveNote", noteId: notes[1].noteId });
+  assert.equal(archived.ok, true);
+});
+
 test("native host governs taxonomy with lock and merge", async () => {
   const source = {
     noteId: `tax-source-${Date.now()}`,
