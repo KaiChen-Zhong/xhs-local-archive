@@ -180,6 +180,17 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
 
+  if (message.type === "clearAllLocal") {
+    const localNotes = await listLocal();
+    await clearLocalNotes();
+    const nativeList = await sendNative({ type: "listNotes" }).catch(() => null);
+    const nativeIds = nativeList && nativeList.ok ? (nativeList.notes || []).map((note) => note.noteId).filter(Boolean) : [];
+    if (nativeIds.length) await sendNative({ type: "deleteLocal", noteIds: nativeIds }).catch(() => null);
+    const deleted = new Set([...localNotes.map((note) => note.noteId).filter(Boolean), ...nativeIds]).size;
+    await appendEvent("info", "clear_all_local", { deleted });
+    return { ok: true, deleted };
+  }
+
   if (message.type === "readLocalMedia") {
     return sendNative({ type: "readLocalMedia", file: message.file || "" });
   }
@@ -420,6 +431,17 @@ async function deleteLocal(noteIds) {
     const tx = db.transaction(STORE_NOTES, "readwrite");
     const store = tx.objectStore(STORE_NOTES);
     for (const id of noteIds) store.delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function clearLocalNotes() {
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NOTES, "readwrite");
+    tx.objectStore(STORE_NOTES).clear();
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });

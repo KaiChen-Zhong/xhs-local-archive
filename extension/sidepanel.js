@@ -59,6 +59,7 @@ document.getElementById("pingHost").addEventListener("click", () => pingHost());
 document.getElementById("openSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("diagnosePage").addEventListener("click", () => send({ type: "diagnosePage" }));
 document.getElementById("clearDiagnostics").addEventListener("click", () => send({ type: "clearDiagnostics" }));
+document.getElementById("clearAllLocal").addEventListener("click", () => clearAllLocal());
 document.getElementById("deleteFiltered").addEventListener("click", () => deleteFiltered());
 document.getElementById("mergeTaxonomy").addEventListener("click", () => mergeTaxonomy());
 document.getElementById("lockCurrentTaxonomy").addEventListener("click", () => lockCurrentTaxonomy());
@@ -118,6 +119,7 @@ function describeResponse(payload, response) {
   if (payload.type === "rejectPendingTaxonomy") return "待审分类已拒绝";
   if (payload.type === "archiveNote") return "单条归档完成";
   if (payload.type === "deleteLocal") return `本地删除：${(payload.noteIds || []).length} 条`;
+  if (payload.type === "clearAllLocal") return `本地已清空：${response.deleted || 0} 条`;
   if (payload.type === "diagnosePage") {
     eventsEl.textContent = JSON.stringify(response.diagnostics || response, null, 2);
     const diagnostics = response.diagnostics || {};
@@ -399,6 +401,11 @@ async function deleteFiltered() {
 
 async function deleteNotes(noteIds) {
   await send({ type: "deleteLocal", noteIds });
+}
+
+async function clearAllLocal() {
+  if (!confirm("清空所有本地采集、分类、导出记录？不会操作小红书账号内容。")) return;
+  await send({ type: "clearAllLocal" });
 }
 
 async function mergeTaxonomy() {
