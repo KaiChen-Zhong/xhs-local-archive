@@ -114,7 +114,7 @@ async function handleMessage(message) {
   if (type === "listNotes") {
     const notes = Object.values(db.notes)
       .map((note) => ({ ...note, status: noteCompleteness(note) }))
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      .sort(compareNotesByDiscoveryOrder);
     return { ok: true, notes };
   }
 
@@ -696,6 +696,16 @@ function topEntries(counts, limit) {
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
     .slice(0, limit);
+}
+
+function compareNotesByDiscoveryOrder(a, b) {
+  const aIndex = Number(a.discoveryIndex);
+  const bIndex = Number(b.discoveryIndex);
+  if (Number.isFinite(aIndex) && Number.isFinite(bIndex) && aIndex !== bIndex) return aIndex - bIndex;
+  if (Number.isFinite(aIndex) !== Number.isFinite(bIndex)) return Number.isFinite(aIndex) ? -1 : 1;
+  const aTime = String(a.createdAt || a.updatedAt || "");
+  const bTime = String(b.createdAt || b.updatedAt || "");
+  return aTime.localeCompare(bTime) || String(a.noteId || "").localeCompare(String(b.noteId || ""));
 }
 
 function classificationOf(note) {

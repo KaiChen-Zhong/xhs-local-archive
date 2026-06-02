@@ -385,6 +385,7 @@ function mergeNoteLocal(existing, incoming) {
     url: sourceUrlWithToken(incoming.url || existing.url || "", xsecToken),
     cover: incoming.cover || existing.cover || "",
     xsecToken,
+    discoveryIndex: Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : incoming.discoveryIndex,
     source: incoming.source || existing.source || "unknown",
     images: unique([...(existing.images || []), ...(incoming.images || [])]),
     videos: unique([...(existing.videos || []), ...(incoming.videos || [])]),
@@ -422,7 +423,17 @@ async function listLocal() {
     request.onerror = () => reject(request.error);
   });
   db.close();
-  return notes.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  return notes.sort(compareNotesByDiscoveryOrder);
+}
+
+function compareNotesByDiscoveryOrder(a, b) {
+  const aIndex = Number(a.discoveryIndex);
+  const bIndex = Number(b.discoveryIndex);
+  if (Number.isFinite(aIndex) && Number.isFinite(bIndex) && aIndex !== bIndex) return aIndex - bIndex;
+  if (Number.isFinite(aIndex) !== Number.isFinite(bIndex)) return Number.isFinite(aIndex) ? -1 : 1;
+  const aTime = String(a.createdAt || a.updatedAt || "");
+  const bTime = String(b.createdAt || b.updatedAt || "");
+  return aTime.localeCompare(bTime) || String(a.noteId || "").localeCompare(String(b.noteId || ""));
 }
 
 async function deleteLocal(noteIds) {

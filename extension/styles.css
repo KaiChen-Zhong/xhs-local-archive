@@ -551,6 +551,17 @@ h2 {
   font-weight: 700;
 }
 
+.classification.pending {
+  border: 1px dashed color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 64%, var(--surface));
+}
+
+.classification.error {
+  border: 1px solid #b42318;
+  background: #fff0ee;
+  color: #b42318;
+}
+
 .complete {
   margin-bottom: 10px;
 }

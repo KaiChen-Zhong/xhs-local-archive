@@ -66,6 +66,7 @@ function mergeNote(existing = {}, incoming = {}) {
     url: sourceUrlWithToken(incoming.url || existing.url || "", xsecToken),
     cover: incoming.cover || existing.cover || "",
     xsecToken,
+    discoveryIndex: Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : incoming.discoveryIndex,
     source: incoming.source || existing.source || "unknown",
     images: dedupeArray([...(existing.images || []), ...(incoming.images || [])]),
     videos: dedupeArray([...(existing.videos || []), ...(incoming.videos || [])]),

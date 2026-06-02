@@ -12,6 +12,7 @@
     newNotesThisScan: 0,
     lastKnownCount: 0,
     lastScrollHeight: 0,
+    discoverySeq: 0,
     bridgeInjected: false,
     collectionEnabled: false,
     collectionMode: "idle"
@@ -162,6 +163,7 @@
       url: note.url || existing && existing.url || "",
       cover: note.cover || existing && existing.cover || "",
       xsecToken: note.xsecToken || existing && existing.xsecToken || "",
+      discoveryIndex: existing && Number.isFinite(existing.discoveryIndex) ? existing.discoveryIndex : STATE.discoverySeq++,
       statuses: {
         ...(existing && existing.statuses || {}),
         ...(note.statuses || {}),

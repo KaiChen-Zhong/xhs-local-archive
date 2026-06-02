@@ -111,7 +111,14 @@ function describeResponse(payload, response) {
     const results = response.results || [];
     return `批量分类：${results.filter((item) => item.ok).length}/${results.length} 成功`;
   }
-  if (payload.type === "classifyNote") return "AI 分类完成";
+  if (payload.type === "classifyNote") {
+    const ai = response.note && response.note.ai || {};
+    const proposed = parsePath(ai.proposedCategoryPath || []);
+    const path = parsePath(ai.categoryPath || []);
+    if (ai.providerError) return `AI 异常，已用本地规则：${ai.providerError}`;
+    if (ai.taxonomyPending && proposed.length) return `AI 分类待审：${proposed.join(" / ")}`;
+    return `AI 分类完成：${(path.length ? path : ["未分类", "待细分"]).join(" / ")}`;
+  }
   if (payload.type === "updateClassification") return "分类已保存";
   if (payload.type === "mergeTaxonomy") return `分类已合并：更新 ${response.changed || 0} 条`;
   if (payload.type === "lockTaxonomy") return "分类已锁定";
@@ -255,7 +262,10 @@ function render(notes) {
     node.querySelector("h2").textContent = note.title || note.noteId;
     node.querySelector(".meta").textContent = `${note.author || "unknown"} · ${note.source || "unknown"}`;
     const classification = classificationOf(note);
-    node.querySelector(".classification").textContent = classification.path.join(" / ");
+    const classificationEl = node.querySelector(".classification");
+    classificationEl.textContent = classificationLabel(note, classification);
+    if (classification.pending) classificationEl.classList.add("pending");
+    if (classification.error) classificationEl.classList.add("error");
     node.querySelector(".complete").textContent = completenessText(note);
     const pathInput = node.querySelector(".pathInput");
     pathInput.value = classification.path.join("/");
@@ -341,8 +351,19 @@ function classificationOf(note) {
   const path = parsePath(ai.categoryPath || ai.path || [ai.category, ai.subcategory]);
   const fallback = inferTaxonomy(note).path;
   return {
-    path: path.length ? path : fallback
+    path: path.length ? path : fallback,
+    proposedPath: parsePath(ai.proposedCategoryPath || []),
+    pending: Boolean(ai.taxonomyPending),
+    error: ai.providerError || ""
   };
+}
+
+function classificationLabel(note, classification) {
+  if (classification.error) return `AI异常：${classification.error}`;
+  if (classification.pending && classification.proposedPath.length) {
+    return `待审：${classification.proposedPath.join(" / ")}`;
+  }
+  return classification.path.join(" / ");
 }
 
 function parsePath(value) {
@@ -387,7 +408,8 @@ function isArchivable(note) {
 
 function completenessText(note) {
   const cover = note.cover ? "封面:有" : "封面:无";
-  const classified = classificationOf(note).path.join("/") === "未分类/待细分" ? "分类:待定" : "分类:有";
+  const classification = classificationOf(note);
+  const classified = classification.pending ? "分类:待审" : classification.path.join("/") === "未分类/待细分" ? "分类:待定" : "分类:有";
   const markdown = note.markdownPath ? "MD:有" : "MD:无";
   return `${cover} · ${classified} · ${markdown}`;
 }
