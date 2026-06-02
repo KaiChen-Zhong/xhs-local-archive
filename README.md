@@ -153,7 +153,7 @@ npm run check
 npm run self-test
 ```
 
-On Windows, `npm run check` completes all Node.js syntax checks first, then requires a Unix `sh` only for the macOS shell-script syntax step. Use Git Bash/WSL for that last `sh -n` portion, or run the PowerShell acceptance script below.
+On Windows, `npm run check` completes all Node.js syntax checks and skips the macOS shell-script syntax step when Unix `sh` is not installed. On Git Bash, WSL, macOS, and Linux, that shell-script step runs normally.
 
 Full local acceptance on Windows:
 
@@ -170,6 +170,7 @@ Current automated coverage:
 - Native host media download safety limits for private/local URLs.
 - Chrome Native Messaging binary protocol ping.
 - PowerShell install/verify/uninstall/acceptance script syntax parsing.
+- Cross-platform check wrapper for macOS shell-script syntax.
 - Content script VM harness for manual capture, visual discovery order, comment-only filtering, and dynamic risk stop.
 - Service worker VM harness for risk lock and capture blocking.
 - Page bridge VM harness for narrowed network mirroring and lookalike-domain rejection.

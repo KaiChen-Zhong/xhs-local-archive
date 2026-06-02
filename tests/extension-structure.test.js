@@ -70,6 +70,7 @@ test("macOS native host scripts install outside source and verify protocol ping"
 
 test("acceptance runner covers checks tests self-test and extension smoke", () => {
   const runner = fs.readFileSync(path.join(root, "scripts", "run-acceptance.ps1"), "utf8");
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   assert.match(runner, /check-powershell-syntax\.ps1/);
   assert.match(runner, /npm run check/);
   assert.match(runner, /npm test/);
@@ -84,6 +85,8 @@ test("acceptance runner covers checks tests self-test and extension smoke", () =
   const psSyntax = fs.readFileSync(path.join(root, "scripts", "check-powershell-syntax.ps1"), "utf8");
   assert.match(psSyntax, /System\.Management\.Automation\.Language\.Parser/);
   assert.match(psSyntax, /ParseFile/);
+  assert.match(pkg.scripts.check, /check-shell-syntax\.js/);
+  assert.equal(fs.existsSync(path.join(root, "scripts", "check-shell-syntax.js")), true);
 });
 
 test("extension keeps conservative scan and long archive safeguards", () => {
