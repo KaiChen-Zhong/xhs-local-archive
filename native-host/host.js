@@ -29,6 +29,12 @@ const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 0);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
 const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 5);
 const CLASSIFY_ALL_RESULT_DETAIL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_RESULT_DETAIL_LIMIT", 500);
+const AI_REQUEST_MIN_INTERVAL_MS = parseEnvInt("XHS_AI_REQUEST_MIN_INTERVAL_MS", 250);
+const AI_MAX_RETRIES = parseEnvInt("XHS_AI_MAX_RETRIES", 3);
+const AI_RETRY_BASE_MS = parseEnvInt("XHS_AI_RETRY_BASE_MS", 2000);
+const AI_RETRY_MAX_MS = parseEnvInt("XHS_AI_RETRY_MAX_MS", 60000);
+const AI_429_COOLDOWN_MS = parseEnvInt("XHS_AI_429_COOLDOWN_MS", 15000);
+const AI_RATE_LIMITERS = new Map();
 const TAXONOMY_LEVEL_NAMES = ["大类", "领域", "主题", "场景", "细项"];
 const DEFAULT_TAXONOMY_PATHS = [
   ["美食", "咖啡甜品"],
@@ -1814,22 +1820,86 @@ function classificationFromParsed(parsed, note) {
 }
 
 async function fetchAiChatCompletion(endpoint, ai, userContent) {
-  return fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ai.apiKey}`
-    },
-    body: JSON.stringify({
-      model: ai.model,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You produce concise JSON for Markdown archiving." },
-        { role: "user", content: userContent }
-      ]
-    })
+  const key = aiRateLimitKey(endpoint, ai);
+  let response = null;
+  for (let attempt = 0; attempt <= AI_MAX_RETRIES; attempt += 1) {
+    response = await scheduleAiProviderRequest(key, () => fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ai.apiKey}`
+      },
+      body: JSON.stringify({
+        model: ai.model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You produce concise JSON for Markdown archiving." },
+          { role: "user", content: userContent }
+        ]
+      })
+    }));
+    if (!isRetriableAiResponse(response) || attempt >= AI_MAX_RETRIES) return response;
+    setAiProviderCooldown(key, aiRetryDelayMs(response, attempt));
+  }
+  return response;
+}
+
+function aiRateLimitKey(endpoint, ai = {}) {
+  let origin = String(endpoint || "");
+  try {
+    const parsed = new URL(endpoint);
+    origin = parsed.origin;
+  } catch {}
+  const keyHash = crypto.createHash("sha256").update(String(ai.apiKey || "")).digest("hex").slice(0, 12);
+  return `${origin}|${keyHash}`;
+}
+
+function aiLimiter(key) {
+  if (!AI_RATE_LIMITERS.has(key)) {
+    AI_RATE_LIMITERS.set(key, { queue: Promise.resolve(), nextAt: 0, cooldownUntil: 0 });
+  }
+  return AI_RATE_LIMITERS.get(key);
+}
+
+async function scheduleAiProviderRequest(key, task) {
+  const limiter = aiLimiter(key);
+  const run = limiter.queue.then(async () => {
+    const now = Date.now();
+    const waitMs = Math.max(0, limiter.nextAt - now, limiter.cooldownUntil - now);
+    if (waitMs > 0) await sleep(waitMs);
+    limiter.nextAt = Date.now() + AI_REQUEST_MIN_INTERVAL_MS;
+    return task();
   });
+  limiter.queue = run.catch(() => {});
+  return run;
+}
+
+function setAiProviderCooldown(key, delayMs) {
+  const limiter = aiLimiter(key);
+  limiter.cooldownUntil = Math.max(limiter.cooldownUntil || 0, Date.now() + Math.max(0, delayMs));
+}
+
+function isRetriableAiResponse(response) {
+  return Boolean(response && [429, 500, 502, 503, 504].includes(Number(response.status)));
+}
+
+function aiRetryDelayMs(response, attempt) {
+  const retryAfter = retryAfterMs(response && response.headers && response.headers.get("retry-after"));
+  if (retryAfter > 0) return Math.min(AI_RETRY_MAX_MS, Math.max(retryAfter, AI_429_COOLDOWN_MS));
+  const base = Number(response && response.status) === 429 ? Math.max(AI_RETRY_BASE_MS, AI_429_COOLDOWN_MS) : AI_RETRY_BASE_MS;
+  const exponential = Math.min(AI_RETRY_MAX_MS, base * Math.pow(2, attempt));
+  const jitter = Math.floor(exponential * 0.2 * Math.random());
+  return Math.min(AI_RETRY_MAX_MS, exponential + jitter);
+}
+
+function retryAfterMs(value) {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
 }
 
 async function archiveMedia(note) {

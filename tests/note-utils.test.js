@@ -19,6 +19,10 @@ const {
 process.env.XHS_ARCHIVE_DIR = path.join(os.tmpdir(), `xhs-archive-tests-${process.pid}`);
 fs.rmSync(process.env.XHS_ARCHIVE_DIR, { recursive: true, force: true });
 process.env.XHS_MEDIA_DOWNLOAD_DELAY_MS = "0";
+process.env.XHS_AI_REQUEST_MIN_INTERVAL_MS = "0";
+process.env.XHS_AI_RETRY_BASE_MS = "10";
+process.env.XHS_AI_RETRY_MAX_MS = "20";
+process.env.XHS_AI_429_COOLDOWN_MS = "10";
 const { handleMessage, buildLocalAiFallback } = require("../native-host/host");
 
 test("stableNoteId extracts explore ids", () => {
@@ -407,6 +411,68 @@ test("native host retries AI classification without image content when provider 
     assert.deepEqual(classified.note.ai.proposedCategoryPath, []);
     assert.equal(classified.note.ai.taxonomyPending, false);
     assert.equal(classified.note.ai.visionFallback, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  }
+});
+
+test("native host backs off and retries AI provider 429 responses", async () => {
+  let calls = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      calls += 1;
+      if (calls === 1) {
+        response.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+        response.end(JSON.stringify({ error: "rate_limited" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                categoryPath: ["科技", "AI工具"],
+                tags: ["AI"],
+                summary: "retried after 429",
+                highlights: "rate limit handled",
+                filename: "retry-429"
+              })
+            }
+          }
+        ]
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = server.address().port;
+    await handleMessage({
+      type: "saveSettings",
+      settings: {
+        ai: {
+          text: {
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            model: "mock-model",
+            apiKey: "mock-key"
+          }
+        }
+      }
+    });
+    const note = {
+      noteId: `retry-429-${Date.now()}`,
+      title: "AI工具收藏",
+      cover: "https://img.example/ai.jpg",
+      url: "https://www.xiaohongshu.com/explore/retry-429"
+    };
+    assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+    const classified = await handleMessage({ type: "classifyNote", noteId: note.noteId });
+    assert.equal(classified.ok, true);
+    assert.equal(calls, 2);
+    assert.deepEqual(classified.note.ai.categoryPath, ["科技", "AI工具"]);
+    assert.equal(classified.note.ai.providerError, undefined);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
