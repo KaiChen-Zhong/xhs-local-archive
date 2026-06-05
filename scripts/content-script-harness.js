@@ -296,6 +296,26 @@ async function main() {
   assert.equal(discovered.notes[0].noteId, "noteabc123");
   assert.equal(discovered.notes[0].xsecToken, "token-noteabc123");
 
+  const supplementalHarness = createHarness();
+  const supplementalCapture = await supplementalHarness.sendToContent({
+    type: "captureNow",
+    options: {
+      knownNotes: [{
+        noteId: "noteabc123",
+        title: "标题 noteabc123",
+        author: "作者 noteabc123",
+        url: "https://www.xiaohongshu.com/explore/noteabc123?xsec_token=token-noteabc123",
+        cover: "https://img.example/noteabc123.jpg",
+        xsecToken: "token-noteabc123",
+        discoveryIndex: 0,
+        source: "manual",
+        statuses: { discovered: true, visualOrdered: true }
+      }]
+    }
+  });
+  assert.equal(supplementalCapture.ok, true);
+  assert.equal(supplementalCapture.count, 0);
+
   const orderHarness = createHarness();
   orderHarness.document.cards = [
     makeCard("lowernote123", { top: 420, left: 20, width: 120, height: 160 }),
@@ -482,11 +502,20 @@ async function main() {
 
   const scanHarness = createHarness();
   scanHarness.document.body.textContent = "笔记・13224";
-  const startedScan = await scanHarness.sendToContent({ type: "startScan" });
+  const startedScan = await scanHarness.sendToContent({
+    type: "startScan",
+    options: {
+      knownNotes: [
+        { noteId: "seeded-1", title: "已收录1", url: "https://www.xiaohongshu.com/explore/seeded-1", cover: "https://img.example/seeded-1.jpg", statuses: { discovered: true, visualOrdered: true }, discoveryIndex: 0 },
+        { noteId: "seeded-2", title: "已收录2", url: "https://www.xiaohongshu.com/explore/seeded-2", cover: "https://img.example/seeded-2.jpg", statuses: { discovered: true, visualOrdered: true }, discoveryIndex: 1 }
+      ]
+    }
+  });
   assert.equal(startedScan.ok, true);
   await new Promise((resolve) => setTimeout(resolve, 30));
   const scanStatus = scanHarness.messages.find((message) => message.type === "scanStatus" && message.status === "running");
   assert.equal(scanStatus.expectedTotal, 13224);
+  assert.equal(scanStatus.knownCount >= 2, true);
   assert.equal(scanStatus.missingCover, 0);
   await scanHarness.sendToContent({ type: "stopScan" });
 
@@ -538,7 +567,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "collectionCursorAnchors", "collectionRootOutOfOrder", "collectionOverlapDedupe", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "supplementalCaptureSkipsKnown", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "collectionCursorAnchors", "collectionRootOutOfOrder", "collectionOverlapDedupe", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "scanSeedsKnownLocalNotes", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

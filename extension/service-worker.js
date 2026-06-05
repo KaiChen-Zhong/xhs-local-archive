@@ -208,7 +208,10 @@ async function handleMessage(message, sender) {
       if (!cooldown.ok) return cooldown;
       await chrome.storage.session.set({ lastScanStartAt: Date.now() });
     }
-    const response = await sendContentMessage(tabId, { type: message.type, options: message.options || null });
+    const knownNotes = message.type === "startScan" || message.type === "captureNow"
+      ? compactKnownNotes(await listLocal().catch(() => []))
+      : [];
+    const response = await sendContentMessage(tabId, { type: message.type, options: { ...(message.options || {}), knownNotes } });
     if (response && isRiskStopReason(response.reason)) await activateRiskLock(response.reason);
     return response;
   }
@@ -454,6 +457,30 @@ async function listLocal() {
   });
   db.close();
   return notes.sort(compareNotesByDiscoveryOrder);
+}
+
+function compactKnownNotes(notes) {
+  return (notes || [])
+    .filter((note) => note && note.noteId)
+    .map((note) => ({
+      noteId: note.noteId,
+      title: note.title || "",
+      author: note.author || "",
+      url: note.url || "",
+      cover: note.cover || "",
+      xsecToken: note.xsecToken || "",
+      discoveryIndex: Number.isFinite(Number(note.discoveryIndex)) ? Number(note.discoveryIndex) : undefined,
+      source: note.source || "local",
+      statuses: {
+        discovered: true,
+        seededLocal: true,
+        apiOrdered: Boolean(note.statuses && note.statuses.apiOrdered),
+        visualOrdered: Boolean(note.statuses && note.statuses.visualOrdered),
+        collectionOrdered: Boolean(note.statuses && note.statuses.collectionOrdered)
+      },
+      createdAt: note.createdAt || new Date().toISOString(),
+      updatedAt: note.updatedAt || ""
+    }));
 }
 
 function compareNotesByDiscoveryOrder(a, b) {

@@ -65,6 +65,7 @@
         sendResponse({ ok: false, count: 0, reason: safetyStop });
         return true;
       }
+      seedKnownNotes(message.options && message.options.knownNotes);
       const result = enableCollection("manual", true, "list");
       sendResponse({
         ok: true,
@@ -739,7 +740,7 @@
       reportSafetyStop(safetyStop);
       return { ok: false, started: false, reason: safetyStop };
     }
-    resetCaptureState();
+    resetCaptureState(options.knownNotes);
     STATE.scanActive = true;
     STATE.scan = sanitizeScanOptions(options);
     STATE.scanStartedAt = Date.now();
@@ -763,7 +764,7 @@
     return { ok: true, started: true, candidateCount: initial.candidates, pageType: initial.pageType };
   }
 
-  function resetCaptureState() {
+  function resetCaptureState(knownNotes) {
     STATE.known = new Map();
     STATE.embeddedFingerprints = new Set();
     STATE.discoverySeq = 0;
@@ -775,6 +776,31 @@
     STATE.stableRounds = 0;
     STATE.lastNewAt = 0;
     STATE.scrollTarget = null;
+    seedKnownNotes(knownNotes);
+  }
+
+  function seedKnownNotes(notes) {
+    for (const note of Array.isArray(notes) ? notes : []) {
+      if (!note || !note.noteId || STATE.known.has(note.noteId)) continue;
+      STATE.known.set(note.noteId, {
+        noteId: note.noteId,
+        title: note.title || "",
+        author: note.author || "",
+        url: note.url || "",
+        cover: note.cover || "",
+        xsecToken: note.xsecToken || "",
+        discoveryIndex: Number.isFinite(Number(note.discoveryIndex)) ? Number(note.discoveryIndex) : undefined,
+        source: note.source || "local-seed",
+        statuses: {
+          ...(note.statuses || {}),
+          discovered: true,
+          seededLocal: true,
+          firstSeenThisScan: false
+        },
+        createdAt: note.createdAt || new Date().toISOString(),
+        updatedAt: note.updatedAt || ""
+      });
+    }
   }
 
   function scrollToTopForScan() {

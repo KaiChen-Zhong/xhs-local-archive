@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function createHarness() {
+function createHarness({ localNotes = [] } = {}) {
   const session = {};
   const createdTabs = [];
   const sentToTabs = [];
@@ -59,7 +59,7 @@ function createHarness() {
   const context = {
     console,
     chrome,
-    indexedDB: {},
+    indexedDB: createFakeIndexedDb(localNotes),
     URL,
     setTimeout,
     clearTimeout
@@ -79,13 +79,57 @@ function createHarness() {
   return { session, createdTabs, sentToTabs, sendRuntimeMessage };
 }
 
+function createFakeIndexedDb(localNotes) {
+  return {
+    open() {
+      const request = {};
+      setTimeout(() => {
+        request.result = {
+          transaction() {
+            return {
+              objectStore() {
+                return {
+                  getAll() {
+                    const getRequest = {};
+                    setTimeout(() => {
+                      getRequest.result = localNotes;
+                      if (typeof getRequest.onsuccess === "function") getRequest.onsuccess();
+                    }, 0);
+                    return getRequest;
+                  }
+                };
+              }
+            };
+          },
+          close() {}
+        };
+        if (typeof request.onsuccess === "function") request.onsuccess();
+      }, 0);
+      return request;
+    }
+  };
+}
+
 async function main() {
-  const harness = createHarness();
+  const harness = createHarness({
+    localNotes: [{
+      noteId: "known-note-1",
+      title: "已收录帖子",
+      author: "作者A",
+      url: "https://www.xiaohongshu.com/explore/known-note-1?xsec_token=known-token",
+      cover: "https://img.example/known-note-1.jpg",
+      xsecToken: "known-token",
+      discoveryIndex: 7,
+      statuses: { discovered: true, visualOrdered: true }
+    }]
+  });
 
   const capture = await harness.sendRuntimeMessage({ type: "captureNow" });
   assert.equal(capture.ok, false);
   assert.equal(capture.reason, "verification_or_login_required");
   assert.equal(harness.sentToTabs.length, 1);
+  assert.equal(harness.sentToTabs[0].payload.options.knownNotes[0].noteId, "known-note-1");
+  assert.equal(harness.sentToTabs[0].payload.options.knownNotes[0].statuses.seededLocal, true);
   assert.equal(harness.session.riskLockReason, "verification_or_login_required");
   assert.ok(Number(harness.session.riskLockUntil) > Date.now());
 
@@ -101,7 +145,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires"]
   }, null, 2));
 }
 
