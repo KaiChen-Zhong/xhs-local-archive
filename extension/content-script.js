@@ -27,7 +27,9 @@
     waitMs: 1200,
     stableRoundsToFinish: 10,
     maxMinutes: 360,
-    maxNewNotes: 100000
+    maxNewNotes: 100000,
+    minScrollSegments: 3,
+    maxScrollSegments: 9
   };
 
   startObserver();
@@ -838,7 +840,75 @@
   }
 
   function scrollByTarget(target, delta) {
-    scrollToTarget(target, Math.max(0, scrollTopOf(target) + delta));
+    try {
+      if (!target || target === window || target === document.documentElement || target === document.body || target === document.scrollingElement) {
+        if (typeof window.scrollBy === "function") window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+        else scrollToTarget(target, Math.max(0, scrollTopOf(target) + delta));
+        return;
+      }
+      if (typeof target.scrollBy === "function") target.scrollBy({ top: delta, left: 0, behavior: "auto" });
+      else target.scrollTop = Math.max(0, scrollTopOf(target) + delta);
+    } catch {
+      scrollToTarget(target, Math.max(0, scrollTopOf(target) + delta));
+    }
+  }
+
+  function performHumanScroll(target, delta, scan, done) {
+    const total = Math.abs(Number(delta) || 0);
+    if (!total) {
+      done();
+      return;
+    }
+    const direction = delta < 0 ? -1 : 1;
+    const minSegments = scan.minScrollSegments || SCAN_DEFAULTS.minScrollSegments;
+    const maxSegments = scan.maxScrollSegments || SCAN_DEFAULTS.maxScrollSegments;
+    const segments = clampNumber(Math.ceil(total / randomBetween(110, 230)), minSegments, maxSegments, 5);
+    let remaining = total;
+    let index = 0;
+    const step = () => {
+      if (!STATE.scanActive || index >= segments || remaining <= 0) {
+        done();
+        return;
+      }
+      const slotsLeft = segments - index;
+      const base = remaining / slotsLeft;
+      const amount = Math.min(remaining, Math.max(24, base * randomBetween(0.72, 1.28)));
+      const signed = direction * amount;
+      dispatchWheelLikeScroll(target, signed);
+      scrollByTarget(target, signed);
+      remaining -= amount;
+      index += 1;
+      window.setTimeout(step, Math.round(randomBetween(90, 260)));
+    };
+    step();
+  }
+
+  function dispatchWheelLikeScroll(target, deltaY) {
+    const eventTarget = wheelEventTarget(target);
+    try {
+      if (typeof WheelEvent === "function") {
+        eventTarget.dispatchEvent && eventTarget.dispatchEvent(new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY,
+          deltaMode: 0,
+          view: window
+        }));
+      }
+    } catch {}
+    try {
+      eventTarget.dispatchEvent && eventTarget.dispatchEvent(new Event("scroll", { bubbles: true }));
+    } catch {}
+  }
+
+  function wheelEventTarget(target) {
+    if (!target || target === window) return document.scrollingElement || document.documentElement || document.body || document;
+    if (target === document.documentElement || target === document.body || target === document.scrollingElement) return target;
+    return target;
+  }
+
+  function randomBetween(min, max) {
+    return min + Math.random() * (max - min);
   }
 
   function controlledScanStep() {
@@ -866,8 +936,7 @@
     const scrollTarget = activeScrollTarget();
     const before = scrollTopOf(scrollTarget);
     const direction = STATE.phase === "up" ? -1 : 1;
-    scrollByTarget(scrollTarget, scanStepPx(scan) * direction);
-    window.setTimeout(() => {
+    performHumanScroll(scrollTarget, scanStepPx(scan) * direction, scan, () => window.setTimeout(() => {
       captureVisibleCards("controlled-scan");
       captureEmbeddedJsonNotes("controlled-scan");
       const activeTarget = activeScrollTarget();
@@ -927,7 +996,7 @@
         return;
       }
       STATE.scanTimer = window.setTimeout(controlledScanStep, scan.waitMs);
-    }, scan.waitMs);
+    }, Math.round(scan.waitMs * randomBetween(0.82, 1.36))));
   }
 
   function stopControlledScan(reason) {

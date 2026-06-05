@@ -19,6 +19,7 @@ class FakeElement {
     this.alt = attrs.alt || "";
     this.rect = attrs.rect || null;
     this.style = attrs.style || {};
+    this.dispatchedEvents = [];
   }
 
   getAttribute(name) {
@@ -47,6 +48,11 @@ class FakeElement {
 
   getBoundingClientRect() {
     return this.rect || { top: 0, left: 0, width: 120, height: 160 };
+  }
+
+  dispatchEvent(event) {
+    this.dispatchedEvents.push(event && event.type || "");
+    return true;
   }
 }
 
@@ -215,6 +221,17 @@ function createHarness() {
   const context = {
     console,
     URL,
+    Event: class {
+      constructor(type) {
+        this.type = type;
+      }
+    },
+    WheelEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.deltaY = init.deltaY || 0;
+      }
+    },
     setTimeout,
     clearTimeout,
     MutationObserver: FakeMutationObserver,
@@ -436,6 +453,7 @@ async function main() {
   assert.equal(innerStarted.ok, true);
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(innerScroller.scrollTop > 0, true);
+  assert.equal(innerScroller.dispatchedEvents.includes("wheel"), true);
   const innerStatus = innerScrollHarness.messages.find((message) => message.type === "scanStatus" && message.status === "running");
   assert.equal(innerStatus.scrollTarget, "element.feeds-container");
   await innerScrollHarness.sendToContent({ type: "stopScan" });
