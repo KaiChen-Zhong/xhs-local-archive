@@ -5,10 +5,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function createHarness({ localNotes = [] } = {}) {
+function createHarness({ localNotes = [], nativeHandler = null } = {}) {
   const session = {};
   const createdTabs = [];
   const sentToTabs = [];
+  const nativeCalls = [];
   const listeners = {};
   const chrome = {
     runtime: {
@@ -16,7 +17,27 @@ function createHarness({ localNotes = [] } = {}) {
       onInstalled: { addListener(callback) { listeners.installed = callback; } },
       onMessage: { addListener(callback) { listeners.message = callback; } },
       connectNative() {
-        throw new Error("native not available in harness");
+        if (!nativeHandler) throw new Error("native not available in harness");
+        const messageListeners = [];
+        const disconnectListeners = [];
+        return {
+          onMessage: { addListener(callback) { messageListeners.push(callback); } },
+          onDisconnect: { addListener(callback) { disconnectListeners.push(callback); } },
+          postMessage(payload) {
+            nativeCalls.push(payload);
+            setTimeout(async () => {
+              try {
+                const response = await nativeHandler(payload);
+                for (const callback of messageListeners) callback(response);
+              } catch (error) {
+                chrome.runtime.lastError = { message: error.message };
+                for (const callback of disconnectListeners) callback();
+                chrome.runtime.lastError = null;
+              }
+            }, 0);
+          },
+          disconnect() {}
+        };
       }
     },
     sidePanel: {
@@ -76,30 +97,65 @@ function createHarness({ localNotes = [] } = {}) {
     });
   }
 
-  return { session, createdTabs, sentToTabs, sendRuntimeMessage };
+  return { session, createdTabs, sentToTabs, nativeCalls, sendRuntimeMessage };
 }
 
 function createFakeIndexedDb(localNotes) {
+  const records = new Map((localNotes || []).map((note) => [note.noteId, { ...note }]));
+  const asyncRequest = (valueGetter, apply = null, done = null) => {
+    const request = {};
+    setTimeout(() => {
+      try {
+        if (apply) apply();
+        request.result = typeof valueGetter === "function" ? valueGetter() : valueGetter;
+        if (typeof request.onsuccess === "function") request.onsuccess();
+        if (done) done();
+      } catch (error) {
+        request.error = error;
+        if (typeof request.onerror === "function") request.onerror();
+        if (done) done();
+      }
+    }, 0);
+    return request;
+  };
   return {
     open() {
       const request = {};
       setTimeout(() => {
         request.result = {
           transaction() {
-            return {
+            const tx = {
+              oncomplete: null,
+              onerror: null,
+              finish() {
+                setTimeout(() => {
+                  if (typeof tx.oncomplete === "function") tx.oncomplete();
+                }, 0);
+              },
               objectStore() {
                 return {
                   getAll() {
-                    const getRequest = {};
-                    setTimeout(() => {
-                      getRequest.result = localNotes;
-                      if (typeof getRequest.onsuccess === "function") getRequest.onsuccess();
-                    }, 0);
-                    return getRequest;
+                    return asyncRequest(() => Array.from(records.values()).map((note) => ({ ...note })), null, tx.finish);
+                  },
+                  get(noteId) {
+                    return asyncRequest(() => records.get(noteId) || null, null, tx.finish);
+                  },
+                  put(note) {
+                    if (note && note.noteId) records.set(note.noteId, { ...note });
+                    tx.finish();
+                  },
+                  delete(noteId) {
+                    records.delete(noteId);
+                    tx.finish();
+                  },
+                  clear() {
+                    records.clear();
+                    tx.finish();
                   }
                 };
               }
             };
+            return tx;
           },
           close() {}
         };
@@ -143,10 +199,53 @@ async function main() {
   assert.equal(unblockedCapture.ok, false);
   assert.equal(unblockedCapture.reason, "verification_or_login_required");
 
+  const nativeNotes = new Map();
+  const autoArchiveHarness = createHarness({
+    nativeHandler(payload) {
+      if (payload.type === "upsertNotes") {
+        for (const note of payload.notes || []) nativeNotes.set(note.noteId, { ...note });
+        return { ok: true, upserted: Array.from(nativeNotes.keys()) };
+      }
+      if (payload.type === "listNotes") {
+        return { ok: true, notes: Array.from(nativeNotes.values()) };
+      }
+      if (payload.type === "archiveNote") {
+        const note = nativeNotes.get(payload.noteId);
+        const archived = { ...note, markdownPath: `C:\\archive\\${payload.noteId}.md` };
+        nativeNotes.set(payload.noteId, archived);
+        return { ok: true, note: archived };
+      }
+      if (payload.type === "logDiagnostic") return { ok: true };
+      return { ok: false, error: `unexpected:${payload.type}` };
+    }
+  });
+  const discovered = await autoArchiveHarness.sendRuntimeMessage({
+    type: "notesDiscovered",
+    notes: [{
+      noteId: "auto-archive-1",
+      title: "自动归档",
+      url: "https://www.xiaohongshu.com/explore/auto-archive-1",
+      cover: "https://img.example/auto-archive-1.jpg"
+    }]
+  });
+  assert.equal(discovered.ok, true);
+  await waitFor(() => autoArchiveHarness.nativeCalls.some((payload) => payload.type === "archiveNote" && payload.noteId === "auto-archive-1"), 1000);
+  const listed = await autoArchiveHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(listed.notes[0].markdownPath, "C:\\archive\\auto-archive-1.md");
+
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery"]
   }, null, 2));
+}
+
+async function waitFor(predicate, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("waitFor timeout");
 }
 
 main().catch((error) => {

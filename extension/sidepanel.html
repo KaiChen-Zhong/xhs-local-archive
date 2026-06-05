@@ -22,11 +22,11 @@
       <button id="startScan">受控扫描</button>
       <button id="stopScan">停止</button>
       <button id="classifyAll" class="primaryAction">批量分类</button>
-      <button id="archiveAll">导出卡片</button>
+      <button id="archiveAll" hidden>导出卡片</button>
       <button id="exportAll">全量导出</button>
-      <button id="saveManualValidation">记录手测</button>
-      <button id="exportSelfTest">自检</button>
-      <button id="diagnosePage">诊断</button>
+      <button id="saveManualValidation" hidden>记录手测</button>
+      <button id="exportSelfTest" hidden>自检</button>
+      <button id="diagnosePage" hidden>诊断</button>
     </header>
     <section class="filters">
       <input id="search" placeholder="搜索标题、作者、分类">
@@ -75,7 +75,7 @@
       <div id="achievements" class="achievements"></div>
     </section>
     <main class="grid" id="notes"></main>
-    <section class="diagnostics">
+    <section class="diagnostics" hidden>
       <div class="diagnosticsHeader">
         <h2>诊断</h2>
         <button id="clearDiagnostics">清空</button>

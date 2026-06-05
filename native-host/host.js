@@ -170,6 +170,13 @@ async function handleMessage(message) {
     return { ok: true, notes };
   }
 
+  if (type === "logDiagnostic") {
+    const event = normalizeDiagnosticEvent(message.event || {});
+    logEvent(db, event.level, event.message, event.meta);
+    saveDb(db);
+    return { ok: true };
+  }
+
   if (type === "archiveNote") {
     const noteId = message.noteId;
     const note = db.notes[noteId];
@@ -181,7 +188,7 @@ async function handleMessage(message) {
     }
     const mediaResult = await archiveMedia(note);
     Object.assign(note, mediaResult.notePatch);
-    const rawAi = message.ai || await buildAi(note, db.settings, db.taxonomy);
+    const rawAi = message.ai || reusableAiForArchive(note.ai) || await buildAi(note, db.settings, db.taxonomy);
     const ai = governClassification(db, rawAi, { source: rawAi.source || "archive", noteId: note.noteId });
     const basename = sanitizeFilename(ai.filename || summarizeForFilename(note), "xhs-note");
     const filename = `${basename}-${note.noteId}.md`;
@@ -574,6 +581,37 @@ function normalizeManualXhsValidation(validation) {
     source: String(validation.source || "sidepanel").slice(0, 80),
     recordedAt: new Date().toISOString(),
     note: String(validation.note || "").slice(0, 500)
+  };
+}
+
+function normalizeDiagnosticEvent(event) {
+  const level = ["info", "warn", "error"].includes(event.level) ? event.level : "info";
+  return {
+    level,
+    message: String(event.message || "diagnostic").slice(0, 120),
+    meta: sanitizeDiagnosticMeta(event.meta)
+  };
+}
+
+function sanitizeDiagnosticMeta(meta) {
+  if (!meta || typeof meta !== "object") return {};
+  try {
+    const json = JSON.stringify(meta);
+    if (json.length <= 4000) return meta;
+    return { truncated: true, sample: json.slice(0, 4000) };
+  } catch {
+    return { unavailable: true };
+  }
+}
+
+function reusableAiForArchive(ai) {
+  if (!ai || typeof ai !== "object") return null;
+  const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
+  if (!path.length && !ai.filename) return null;
+  return {
+    ...ai,
+    categoryPath: path.length ? path : ai.categoryPath,
+    source: ai.source || "archive"
   };
 }
 

@@ -7,7 +7,11 @@ const HOST_NAME = "com.xhs_archive.host";
 const SCAN_COOLDOWN_MS = 30000;
 const ARCHIVE_ALL_LIMIT = 10;
 const ARCHIVE_ALL_DELAY_MS = 2000;
+const AUTO_ARCHIVE_BATCH_LIMIT = 25;
+const AUTO_ARCHIVE_DELAY_MS = 350;
 const RISK_LOCK_MS = 15 * 60 * 1000;
+let autoArchiveRunning = false;
+let autoArchiveRequested = false;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -31,6 +35,7 @@ async function handleMessage(message, sender) {
       count: notes.length,
       nativeOk: Boolean(nativeResult && nativeResult.ok)
     });
+    queueAutoArchive("notes_discovered");
     return { ok: true, count: notes.length };
   }
 
@@ -40,8 +45,15 @@ async function handleMessage(message, sender) {
       if (isRiskStopReason(message.reason)) await activateRiskLock(message.reason);
       await appendEvent("info", "scan_stopped", {
         reason: message.reason || "",
-        knownCount: message.knownCount || 0
+        knownCount: message.knownCount || 0,
+        expectedTotal: message.expectedTotal || 0,
+        coveragePercent: message.coveragePercent || 0,
+        missingTitle: message.missingTitle || 0,
+        missingCover: message.missingCover || 0,
+        missingUrl: message.missingUrl || 0,
+        scrollTarget: message.scrollTarget || ""
       });
+      queueAutoArchive("scan_stopped");
     }
     return { ok: true };
   }
@@ -64,16 +76,10 @@ async function handleMessage(message, sender) {
   }
 
   if (message.type === "archiveAll") {
-    const notes = await listLocal();
-    const candidates = notes.filter((note) => !note.markdownPath && !note.unavailableReason && isArchivableLocal(note)).slice(0, ARCHIVE_ALL_LIMIT);
-    const results = [];
-    for (let index = 0; index < candidates.length; index += 1) {
-      if (index > 0) await sleep(ARCHIVE_ALL_DELAY_MS);
-      const note = candidates[index];
-      const result = await sendNative({ type: "archiveNote", noteId: note.noteId }).catch((error) => ({ ok: false, error: error.message }));
-      if (result.ok && result.note) await upsertLocal([result.note]);
-      results.push({ noteId: note.noteId, ok: Boolean(result.ok), error: result.error || "" });
-    }
+    const { results } = await archivePendingCards({
+      limit: ARCHIVE_ALL_LIMIT,
+      delayMs: ARCHIVE_ALL_DELAY_MS
+    });
     await appendEvent("info", "archive_all", { count: results.length, ok: results.filter((item) => item.ok).length });
     return { ok: true, results };
   }
@@ -86,6 +92,7 @@ async function handleMessage(message, sender) {
       ok: Boolean(result.ok),
       error: result.error || ""
     });
+    if (result.ok) queueAutoArchive("classify_note");
     return result;
   }
 
@@ -100,6 +107,7 @@ async function handleMessage(message, sender) {
       count: Number.isFinite(result.processed) ? result.processed : (result.results || []).length,
       error: result.error || ""
     });
+    if (result.ok) queueAutoArchive("classify_all");
     return result;
   }
 
@@ -115,6 +123,7 @@ async function handleMessage(message, sender) {
       ok: Boolean(result.ok),
       error: result.error || ""
     });
+    if (result.ok) queueAutoArchive("update_classification");
     return result;
   }
 
@@ -213,13 +222,27 @@ async function handleMessage(message, sender) {
       : [];
     const response = await sendContentMessage(tabId, { type: message.type, options: { ...(message.options || {}), knownNotes } });
     if (response && isRiskStopReason(response.reason)) await activateRiskLock(response.reason);
+    await appendEvent(response && response.ok ? "info" : "error", `page_${message.type}`, {
+      ok: Boolean(response && response.ok),
+      reason: response && (response.reason || response.error) || "",
+      count: response && response.count || 0,
+      candidateCount: response && response.candidateCount || 0,
+      pageType: response && response.pageType || "",
+      diagnostics: response && response.diagnostics || null
+    });
     return response;
   }
 
   if (message.type === "diagnosePage") {
     const tabId = message.tabId || sender.tab && sender.tab.id || await activeTabId();
     if (!tabId) return { ok: false, error: "no_active_tab" };
-    return sendContentMessage(tabId, { type: "diagnosePage" });
+    const diagnostics = await sendContentMessage(tabId, { type: "diagnosePage" });
+    await appendEvent(diagnostics && diagnostics.ok ? "info" : "error", "page_diagnose", {
+      ok: Boolean(diagnostics && diagnostics.ok),
+      diagnostics: diagnostics && diagnostics.diagnostics || null,
+      error: diagnostics && diagnostics.error || ""
+    });
+    return diagnostics;
   }
 
   if (message.type === "openNote") {
@@ -598,16 +621,79 @@ function isArchivableLocal(note) {
   return Boolean(note && note.noteId);
 }
 
+function queueAutoArchive(reason) {
+  autoArchiveRequested = true;
+  runAutoArchive(reason).catch((error) => {
+    appendEvent("error", "auto_archive", { reason, error: error.message }).catch(() => {});
+  });
+}
+
+async function runAutoArchive(reason) {
+  if (autoArchiveRunning) return;
+  autoArchiveRunning = true;
+  try {
+    while (autoArchiveRequested) {
+      autoArchiveRequested = false;
+      const result = await archivePendingCards({
+        limit: AUTO_ARCHIVE_BATCH_LIMIT,
+        delayMs: AUTO_ARCHIVE_DELAY_MS
+      });
+      if (result.results.length) {
+        await appendEvent("info", "auto_archive", {
+          reason,
+          count: result.results.length,
+          ok: result.results.filter((item) => item.ok).length,
+          hasMore: result.hasMore
+        });
+      }
+      if (result.hasMore) {
+        autoArchiveRequested = true;
+        await sleep(AUTO_ARCHIVE_DELAY_MS);
+      }
+    }
+  } finally {
+    autoArchiveRunning = false;
+  }
+}
+
+async function archivePendingCards({ limit, delayMs }) {
+  const native = await sendNative({ type: "listNotes" }).catch(() => null);
+  const notes = native && native.ok ? (native.notes || []) : await listLocal();
+  const allCandidates = notes.filter((note) => !note.markdownPath && !note.unavailableReason && isArchivableLocal(note));
+  const candidates = allCandidates.slice(0, limit);
+  const results = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (index > 0 && delayMs > 0) await sleep(delayMs);
+    const note = candidates[index];
+    const result = await sendNative({ type: "archiveNote", noteId: note.noteId }).catch((error) => ({ ok: false, error: error.message }));
+    if (result.ok && result.note) await upsertLocal([result.note]);
+    results.push({ noteId: note.noteId, ok: Boolean(result.ok), error: result.error || "" });
+  }
+  return { results, hasMore: allCandidates.length > candidates.length };
+}
+
 async function appendEvent(level, message, meta = {}) {
-  const current = await chrome.storage.session.get(["debugEvents"]);
-  const events = current.debugEvents || [];
-  events.push({
+  const event = {
     ts: new Date().toISOString(),
     level,
     message,
-    meta
-  });
+    meta: compactEventMeta(meta)
+  };
+  const current = await chrome.storage.session.get(["debugEvents"]);
+  const events = current.debugEvents || [];
+  events.push(event);
   await chrome.storage.session.set({ debugEvents: events.slice(-100) });
+  await sendNative({ type: "logDiagnostic", event }).catch(() => null);
+}
+
+function compactEventMeta(meta) {
+  if (!meta || typeof meta !== "object") return {};
+  const json = JSON.stringify(meta);
+  if (json.length <= 4000) return meta;
+  return {
+    truncated: true,
+    sample: json.slice(0, 4000)
+  };
 }
 
 async function checkScanCooldown() {

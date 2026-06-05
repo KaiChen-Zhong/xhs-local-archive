@@ -92,6 +92,7 @@ test("acceptance runner covers checks tests self-test and extension smoke", () =
 test("extension keeps conservative scan and long archive safeguards", () => {
   const contentScript = fs.readFileSync(path.join(root, "extension", "content-script.js"), "utf8");
   const serviceWorker = fs.readFileSync(path.join(root, "extension", "service-worker.js"), "utf8");
+  const nativeHost = fs.readFileSync(path.join(root, "native-host", "host.js"), "utf8");
   const sidePanel = fs.readFileSync(path.join(root, "extension", "sidepanel.js"), "utf8");
   const sidePanelHtml = fs.readFileSync(path.join(root, "extension", "sidepanel.html"), "utf8");
   assert.match(contentScript, /stepPx:\s*760/);
@@ -156,6 +157,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.doesNotMatch(serviceWorker, /HYDRATE_OPEN_COOLDOWN_MS/);
   assert.match(serviceWorker, /ARCHIVE_ALL_LIMIT\s*=\s*10/);
   assert.match(serviceWorker, /ARCHIVE_ALL_DELAY_MS\s*=\s*2000/);
+  assert.match(serviceWorker, /AUTO_ARCHIVE_BATCH_LIMIT\s*=\s*25/);
+  assert.match(serviceWorker, /AUTO_ARCHIVE_DELAY_MS\s*=\s*350/);
   assert.match(serviceWorker, /RISK_LOCK_MS\s*=\s*15\s*\*\s*60\s*\*\s*1000/);
   assert.match(serviceWorker, /isRiskStopReason\(message\.reason\)/);
   assert.match(serviceWorker, /activateRiskLock\(message\.reason\)/);
@@ -166,8 +169,13 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(serviceWorker, /chrome\.scripting\.executeScript/);
   assert.match(serviceWorker, /response && isRiskStopReason\(response\.reason\)/);
   assert.match(serviceWorker, /archiveNote.*180000/s);
-  assert.match(serviceWorker, /slice\(0, ARCHIVE_ALL_LIMIT\)/);
-  assert.match(serviceWorker, /await sleep\(ARCHIVE_ALL_DELAY_MS\)/);
+  assert.match(serviceWorker, /queueAutoArchive\("notes_discovered"\)/);
+  assert.match(serviceWorker, /queueAutoArchive\("scan_stopped"\)/);
+  assert.match(serviceWorker, /function archivePendingCards/);
+  assert.match(serviceWorker, /allCandidates\.slice\(0, limit\)/);
+  assert.match(serviceWorker, /sendNative\(\{ type: "logDiagnostic", event \}\)/);
+  assert.match(serviceWorker, /delayMs:\s*ARCHIVE_ALL_DELAY_MS/);
+  assert.match(serviceWorker, /await sleep\(delayMs\)/);
   assert.match(serviceWorker, /archiveAll.*300000/s);
   assert.doesNotMatch(serviceWorker, /limit:\s*CLASSIFY_ALL_LIMIT/);
   assert.match(serviceWorker, /classifyAll.*12\s*\*\s*60\s*\*\s*60\s*\*\s*1000/s);
@@ -179,8 +187,14 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.doesNotMatch(serviceWorker, /message\.type === "contentReady"/);
   assert.match(serviceWorker, /message\.type === "startScan" \|\| message\.type === "captureNow"/);
   assert.match(serviceWorker, /message\.type === "saveManualXhsValidation"/);
+  assert.match(nativeHost, /type === "logDiagnostic"/);
+  assert.match(nativeHost, /reusableAiForArchive\(note\.ai\)/);
   assert.doesNotMatch(serviceWorker, /pruneHydrateUrls/);
-  assert.match(sidePanelHtml, /id="saveManualValidation"/);
+  assert.match(sidePanelHtml, /id="saveManualValidation" hidden/);
+  assert.match(sidePanelHtml, /id="exportSelfTest" hidden/);
+  assert.match(sidePanelHtml, /id="diagnosePage" hidden/);
+  assert.match(sidePanelHtml, /id="archiveAll" hidden/);
+  assert.match(sidePanelHtml, /<section class="diagnostics" hidden>/);
   assert.match(sidePanel, /describeResponse/);
   assert.match(sidePanel, /stepPx:\s*760/);
   assert.match(sidePanel, /waitMs:\s*1200/);
@@ -195,6 +209,7 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(serviceWorker, /resetCapturedState/);
   assert.match(sidePanel, /Math\.min\(count, 10\)/);
   assert.match(sidePanel, /不打开帖子/);
+  assert.match(sidePanel, /后台会自动归档标题、封面、分类卡片/);
   assert.match(sidePanel, /手动采集：新增/);
   assert.match(sidePanel, /候选/);
   assert.match(sidePanel, /批量归档：/);

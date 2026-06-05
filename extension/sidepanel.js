@@ -308,8 +308,9 @@ function renderNoteCard(note) {
     }
   }));
   const archiveButton = node.querySelector(".archive");
+  archiveButton.hidden = true;
   archiveButton.disabled = false;
-  archiveButton.title = "导出标题、封面、分类卡片";
+  archiveButton.title = "后台会自动归档标题、封面、分类卡片";
   archiveButton.addEventListener("click", () => send({ type: "archiveNote", noteId: note.noteId }));
   node.querySelector(".deleteOne").addEventListener("click", () => deleteNotes([note.noteId]));
   return node;
