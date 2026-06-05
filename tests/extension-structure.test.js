@@ -103,6 +103,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(contentScript, /incomplete_expected_total/);
   assert.match(contentScript, /shouldContinueIncompleteScan/);
   assert.match(contentScript, /findScrollTarget/);
+  assert.match(contentScript, /scrollTargetScore/);
+  assert.match(contentScript, /side-\?bar\|sidebar/);
   assert.match(contentScript, /apiOrdered/);
   assert.match(contentScript, /lastScrollHeight/);
   assert.match(contentScript, /rememberNote/);
@@ -163,6 +165,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(serviceWorker, /backgroundJobStatus/);
   assert.match(serviceWorker, /message\.type === "retryBackgroundJobs"/);
   assert.match(serviceWorker, /queueAutoArchive\("list_notes_recovery"\)/);
+  assert.match(serviceWorker, /mergeLocalAndNativeNotes/);
+  assert.match(serviceWorker, /sendNative\(\{ type: "upsertNotes", notes: missingInNative \}\)/);
   assert.match(serviceWorker, /RISK_LOCK_MS\s*=\s*15\s*\*\s*60\s*\*\s*1000/);
   assert.match(serviceWorker, /isRiskStopReason\(message\.reason\)/);
   assert.match(serviceWorker, /activateRiskLock\(message\.reason\)/);

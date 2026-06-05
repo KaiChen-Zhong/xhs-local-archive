@@ -478,6 +478,28 @@ async function main() {
   assert.equal(innerStatus.scrollTarget, "element.feeds-container");
   await innerScrollHarness.sendToContent({ type: "stopScan" });
 
+  const sideBarHarness = createHarness();
+  sideBarHarness.document.body.textContent = "笔记・999";
+  const sideBar = new FakeElement({ attrs: { className: "side-bar side-bar-ai" } });
+  sideBar.scrollHeight = 20000;
+  sideBar.clientHeight = 800;
+  sideBar.scrollTop = 0;
+  const feedScroller = new FakeElement({
+    attrs: { className: "feeds-container" },
+    children: { anchors: [makeCard("feedscroll123")] }
+  });
+  feedScroller.scrollHeight = 5000;
+  feedScroller.clientHeight = 800;
+  feedScroller.scrollTop = 0;
+  sideBarHarness.document.scrollContainers = [sideBar, feedScroller];
+  const sideBarStarted = await sideBarHarness.sendToContent({ type: "startScan" });
+  assert.equal(sideBarStarted.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const sideBarStatus = sideBarHarness.messages.find((message) => message.type === "scanStatus" && message.status === "running");
+  assert.notEqual(sideBarStatus.scrollTarget, "element.side-bar.side-bar-ai");
+  assert.equal(sideBarStatus.scrollTarget, "element.feeds-container");
+  await sideBarHarness.sendToContent({ type: "stopScan" });
+
   const profileHarness = createHarness();
   const profileCard = makeXhsProfileCard("profiletoken123");
   profileHarness.document.cards = [profileCard.hiddenExplore, profileCard.visibleProfile];
@@ -567,7 +589,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureNow", "supplementalCaptureSkipsKnown", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "collectionCursorAnchors", "collectionRootOutOfOrder", "collectionOverlapDedupe", "innerScrollContainer", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "scanSeedsKnownLocalNotes", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
+    checks: ["captureNow", "supplementalCaptureSkipsKnown", "visualDiscoveryOrder", "apiCollectionOrderOverride", "networkRequestOrder", "collectionCursorAnchors", "collectionRootOutOfOrder", "collectionOverlapDedupe", "innerScrollContainer", "avoidSidebarScrollTarget", "profileTokenUrlPreferred", "lazyCoverExtraction", "scanCoverageDiagnostics", "scanSeedsKnownLocalNotes", "incompleteDoesNotAutoStop", "profileFavoritesDiagnostics", "fallbackCardExtraction", "embeddedJsonExtraction", "bridgeEnabledAfterLoad", "commentOnlyIgnored", "dynamicRiskStop", "bridgeDisabledOnRisk"]
   }, null, 2));
 }
 

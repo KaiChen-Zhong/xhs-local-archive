@@ -70,7 +70,7 @@ async function handleMessage(message, sender) {
   if (message.type === "listNotes") {
     const localNotes = await listLocal();
     const native = await sendNative({ type: "listNotes" }).catch(() => null);
-    const notes = native && native.ok ? native.notes : localNotes;
+    const notes = native && native.ok ? mergeLocalAndNativeNotes(localNotes, native.notes || []) : localNotes;
     const failedIds = new Set(autoArchiveFailures.map((item) => item.noteId).filter(Boolean));
     if ((notes || []).some((note) => !failedIds.has(note.noteId) && !note.markdownPath && !note.unavailableReason && isArchivableLocal(note))) {
       queueAutoArchive("list_notes_recovery");
@@ -720,16 +720,24 @@ async function runAutoArchive(reason) {
 }
 
 async function archivePendingCards({ limit, delayMs }) {
+  const localNotes = await listLocal().catch(() => []);
   const native = await sendNative({ type: "listNotes" }).catch(() => null);
-  const notes = native && native.ok ? (native.notes || []) : await listLocal();
+  const nativeNotes = native && native.ok ? (native.notes || []) : [];
+  const notes = native && native.ok ? mergeLocalAndNativeNotes(localNotes, nativeNotes) : localNotes;
+  const nativeIds = new Set(nativeNotes.map((note) => note.noteId).filter(Boolean));
   const allCandidates = notes.filter((note) => !note.markdownPath && !note.unavailableReason && isArchivableLocal(note));
   const candidates = allCandidates.slice(0, limit);
   const results = [];
+  const missingInNative = candidates.filter((note) => !nativeIds.has(note.noteId));
+  if (missingInNative.length) {
+    await sendNative({ type: "upsertNotes", notes: missingInNative }).catch(() => null);
+  }
   for (let index = 0; index < candidates.length; index += 1) {
     if (index > 0 && delayMs > 0) await sleep(delayMs);
     const note = candidates[index];
     const result = await sendNative({ type: "archiveNote", noteId: note.noteId }).catch((error) => ({ ok: false, error: error.message }));
     if (result.ok && result.note) await upsertLocal([result.note]);
+    if (result.ok) autoArchiveFailures = autoArchiveFailures.filter((item) => item.noteId !== note.noteId);
     results.push({ noteId: note.noteId, ok: Boolean(result.ok), error: result.error || "" });
   }
   return {
@@ -737,6 +745,18 @@ async function archivePendingCards({ limit, delayMs }) {
     remaining: Math.max(0, allCandidates.length - candidates.length),
     hasMore: allCandidates.length > candidates.length
   };
+}
+
+function mergeLocalAndNativeNotes(localNotes, nativeNotes) {
+  const byId = new Map();
+  for (const note of nativeNotes || []) {
+    if (note && note.noteId) byId.set(note.noteId, note);
+  }
+  for (const note of localNotes || []) {
+    if (!note || !note.noteId) continue;
+    byId.set(note.noteId, mergeNoteLocal(byId.get(note.noteId) || {}, note));
+  }
+  return Array.from(byId.values()).sort(compareNotesByDiscoveryOrder);
 }
 
 async function setBackgroundJobStatus(status) {

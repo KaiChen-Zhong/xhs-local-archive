@@ -815,19 +815,39 @@
   function findScrollTarget() {
     const documentTarget = document.scrollingElement || document.documentElement || document.body;
     const candidates = [];
-    if (documentTarget) candidates.push(documentTarget);
+    if (documentTarget) candidates.push({ node: documentTarget, score: scrollTargetScore(documentTarget, true) });
     const nodes = Array.from(document.querySelectorAll && document.querySelectorAll("main, section, div") || []);
     for (const node of nodes) {
       if (!node || node === documentTarget) continue;
       if (!isScrollableTarget(node)) continue;
-      const score = scrollHeightOf(node) - viewportHeightOf(node) + (node.querySelector && node.querySelector("a[href*='/explore/'], a[href*='/user/profile/'], [data-note-id], [data-noteid]") ? 100000 : 0);
-      candidates.push({ node, score });
+      candidates.push({ node, score: scrollTargetScore(node, false) });
     }
     const ranked = candidates
       .map((item) => item && item.node ? item : { node: item, score: scrollHeightOf(item) - viewportHeightOf(item) })
       .filter((item) => item.node && isScrollableTarget(item.node))
       .sort((a, b) => b.score - a.score);
     return ranked[0] && ranked[0].node || documentTarget || window;
+  }
+
+  function scrollTargetScore(target, isDocumentTarget) {
+    const base = scrollHeightOf(target) - viewportHeightOf(target);
+    const label = scrollTargetLabel(target);
+    const noteCount = target && target.querySelectorAll
+      ? target.querySelectorAll("a[href*='/explore/'], a[href*='/user/profile/'], [data-note-id], [data-noteid]").length
+      : 0;
+    let score = base + Math.min(noteCount, 30) * 100000;
+    if (isDocumentTarget) score += 250000;
+    if (/feed|feeds|note|masonry|waterfall|profile|收藏|likes|collect/i.test(label)) score += 800000;
+    if (/side-?bar|sidebar|side_bar|ai|assistant|chat|nav|menu/i.test(label)) score -= 1800000;
+    try {
+      const rect = target && target.getBoundingClientRect && target.getBoundingClientRect();
+      const width = Number(rect && rect.width || 0);
+      const height = Number(rect && rect.height || 0);
+      const viewportWidth = Number(window.innerWidth || document.documentElement && document.documentElement.clientWidth || 0);
+      if (width && viewportWidth && width < Math.min(520, viewportWidth * 0.45)) score -= 900000;
+      if (height && height < viewportHeightOf(document.scrollingElement || document.documentElement || window) * 0.35) score -= 300000;
+    } catch {}
+    return score;
   }
 
   function isScrollableTarget(target) {
