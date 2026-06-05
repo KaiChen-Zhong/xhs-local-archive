@@ -9,13 +9,22 @@ const ARCHIVE_ALL_LIMIT = 10;
 const ARCHIVE_ALL_DELAY_MS = 2000;
 const AUTO_ARCHIVE_BATCH_LIMIT = 25;
 const AUTO_ARCHIVE_DELAY_MS = 350;
+const AUTO_ARCHIVE_FAILURE_LIMIT = 80;
 const RISK_LOCK_MS = 15 * 60 * 1000;
 let autoArchiveRunning = false;
 let autoArchiveRequested = false;
+let autoArchiveFailures = [];
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  queueAutoArchive("installed_recovery");
 });
+
+if (chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    queueAutoArchive("startup_recovery");
+  });
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender).then(sendResponse).catch((error) => {
@@ -61,7 +70,12 @@ async function handleMessage(message, sender) {
   if (message.type === "listNotes") {
     const localNotes = await listLocal();
     const native = await sendNative({ type: "listNotes" }).catch(() => null);
-    return { ok: true, notes: native && native.ok ? native.notes : localNotes };
+    const notes = native && native.ok ? native.notes : localNotes;
+    const failedIds = new Set(autoArchiveFailures.map((item) => item.noteId).filter(Boolean));
+    if ((notes || []).some((note) => !failedIds.has(note.noteId) && !note.markdownPath && !note.unavailableReason && isArchivableLocal(note))) {
+      queueAutoArchive("list_notes_recovery");
+    }
+    return { ok: true, notes };
   }
 
   if (message.type === "archiveNote") {
@@ -179,6 +193,18 @@ async function handleMessage(message, sender) {
       error: result.error || ""
     });
     return result;
+  }
+
+  if (message.type === "retryBackgroundJobs") {
+    autoArchiveFailures = [];
+    await setBackgroundJobStatus({
+      type: "auto_archive",
+      status: "queued",
+      reason: "manual_retry",
+      failures: []
+    });
+    queueAutoArchive("manual_retry");
+    return { ok: true };
   }
 
   if (message.type === "deleteLocal") {
@@ -631,19 +657,47 @@ function queueAutoArchive(reason) {
 async function runAutoArchive(reason) {
   if (autoArchiveRunning) return;
   autoArchiveRunning = true;
+  let processedTotal = 0;
+  let succeededTotal = 0;
   try {
+    await setBackgroundJobStatus({
+      type: "auto_archive",
+      status: "running",
+      reason,
+      processed: 0,
+      succeeded: 0,
+      failures: autoArchiveFailures
+    });
     while (autoArchiveRequested) {
       autoArchiveRequested = false;
       const result = await archivePendingCards({
         limit: AUTO_ARCHIVE_BATCH_LIMIT,
         delayMs: AUTO_ARCHIVE_DELAY_MS
       });
+      processedTotal += result.results.length;
+      succeededTotal += result.results.filter((item) => item.ok).length;
       if (result.results.length) {
         await appendEvent("info", "auto_archive", {
           reason,
           count: result.results.length,
           ok: result.results.filter((item) => item.ok).length,
+          pending: result.remaining,
           hasMore: result.hasMore
+        });
+        autoArchiveFailures = [
+          ...autoArchiveFailures,
+          ...result.results
+            .filter((item) => !item.ok)
+            .map((item) => ({ noteId: item.noteId, error: item.error || "archive_failed" }))
+        ].slice(-AUTO_ARCHIVE_FAILURE_LIMIT);
+        await setBackgroundJobStatus({
+          type: "auto_archive",
+          status: result.hasMore ? "running" : "completed",
+          reason,
+          processed: processedTotal,
+          succeeded: succeededTotal,
+          pending: result.remaining,
+          failures: autoArchiveFailures
         });
       }
       if (result.hasMore) {
@@ -651,6 +705,15 @@ async function runAutoArchive(reason) {
         await sleep(AUTO_ARCHIVE_DELAY_MS);
       }
     }
+    await setBackgroundJobStatus({
+      type: "auto_archive",
+      status: autoArchiveFailures.length ? "failed_items" : "idle",
+      reason,
+      processed: processedTotal,
+      succeeded: succeededTotal,
+      pending: 0,
+      failures: autoArchiveFailures
+    });
   } finally {
     autoArchiveRunning = false;
   }
@@ -669,7 +732,21 @@ async function archivePendingCards({ limit, delayMs }) {
     if (result.ok && result.note) await upsertLocal([result.note]);
     results.push({ noteId: note.noteId, ok: Boolean(result.ok), error: result.error || "" });
   }
-  return { results, hasMore: allCandidates.length > candidates.length };
+  return {
+    results,
+    remaining: Math.max(0, allCandidates.length - candidates.length),
+    hasMore: allCandidates.length > candidates.length
+  };
+}
+
+async function setBackgroundJobStatus(status) {
+  await chrome.storage.session.set({
+    backgroundJobStatus: {
+      updatedAt: new Date().toISOString(),
+      ...status,
+      failures: (status.failures || []).slice(-AUTO_ARCHIVE_FAILURE_LIMIT)
+    }
+  });
 }
 
 async function appendEvent(level, message, meta = {}) {

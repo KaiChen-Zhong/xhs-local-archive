@@ -354,6 +354,33 @@ select:focus {
   font-size: 12px;
 }
 
+.jobPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 0 12px 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.jobStatus,
+.captureHealth {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.captureHealth {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
 .insights {
   margin: 0 12px 12px;
   padding: 12px;

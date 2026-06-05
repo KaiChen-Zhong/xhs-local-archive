@@ -230,6 +230,8 @@ async function main() {
   });
   assert.equal(discovered.ok, true);
   await waitFor(() => autoArchiveHarness.nativeCalls.some((payload) => payload.type === "archiveNote" && payload.noteId === "auto-archive-1"), 1000);
+  await waitFor(() => autoArchiveHarness.session.backgroundJobStatus && autoArchiveHarness.session.backgroundJobStatus.status === "idle", 1000);
+  assert.equal(autoArchiveHarness.session.backgroundJobStatus.succeeded, 1);
   const listed = await autoArchiveHarness.sendRuntimeMessage({ type: "listNotes" });
   assert.equal(listed.notes[0].markdownPath, "C:\\archive\\auto-archive-1.md");
 

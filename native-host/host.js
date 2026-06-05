@@ -192,7 +192,7 @@ async function handleMessage(message) {
     const ai = governClassification(db, rawAi, { source: rawAi.source || "archive", noteId: note.noteId });
     const basename = sanitizeFilename(ai.filename || summarizeForFilename(note), "xhs-note");
     const filename = `${basename}-${note.noteId}.md`;
-    const notesDir = path.join(archiveRoot, "notes");
+    const notesDir = path.join(archiveRoot, "notes", ...archiveDirectorySegments(ai));
     ensureDir(notesDir);
     const markdownPath = path.join(notesDir, filename);
     fs.writeFileSync(markdownPath, renderMarkdown(note, ai), "utf8");
@@ -613,6 +613,14 @@ function reusableAiForArchive(ai) {
     categoryPath: path.length ? path : ai.categoryPath,
     source: ai.source || "archive"
   };
+}
+
+function archiveDirectorySegments(ai) {
+  const path = normalizeCategoryPath(ai && (ai.categoryPath || [ai.category, ai.subcategory]) || []);
+  const segments = (path.length ? path : ["未分类"]).slice(0, 3)
+    .map((item) => sanitizeFilename(item, "未分类"))
+    .filter(Boolean);
+  return segments.length ? segments : ["未分类"];
 }
 
 function manualValidationPrerequisites(db) {

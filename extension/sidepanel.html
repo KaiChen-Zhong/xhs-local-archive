@@ -23,7 +23,7 @@
       <button id="stopScan">停止</button>
       <button id="classifyAll" class="primaryAction">批量分类</button>
       <button id="archiveAll" hidden>导出卡片</button>
-      <button id="exportAll">全量导出</button>
+      <button id="exportAll">导出全部数据备份</button>
       <button id="saveManualValidation" hidden>记录手测</button>
       <button id="exportSelfTest" hidden>自检</button>
       <button id="diagnosePage" hidden>诊断</button>
@@ -67,6 +67,14 @@
     <section class="metricStrip">
       <div class="status" id="status">等待操作</div>
       <div class="report" id="report">本地 0 条</div>
+    </section>
+    <section class="jobPanel">
+      <div>
+        <div class="sectionLabel">后台队列</div>
+        <div id="jobStatus" class="jobStatus">后台归档空闲</div>
+      </div>
+      <button id="retryBackgroundJobs">重试后台失败</button>
+      <div id="captureHealth" class="captureHealth">采集健康：等待扫描</div>
     </section>
     <section class="insights">
       <h2 id="personaName">收藏人格卡</h2>

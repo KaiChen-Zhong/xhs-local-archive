@@ -3,6 +3,8 @@
 const statusEl = document.getElementById("status");
 const reportEl = document.getElementById("report");
 const eventsEl = document.getElementById("events");
+const jobStatusEl = document.getElementById("jobStatus");
+const captureHealthEl = document.getElementById("captureHealth");
 const personaNameEl = document.getElementById("personaName");
 const personaTextEl = document.getElementById("personaText");
 const receiptEl = document.getElementById("receipt");
@@ -64,6 +66,7 @@ document.getElementById("pingHost").addEventListener("click", () => pingHost());
 document.getElementById("openSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("diagnosePage").addEventListener("click", () => send({ type: "diagnosePage" }));
 document.getElementById("clearDiagnostics").addEventListener("click", () => send({ type: "clearDiagnostics" }));
+document.getElementById("retryBackgroundJobs").addEventListener("click", () => send({ type: "retryBackgroundJobs" }));
 document.getElementById("clearAllLocal").addEventListener("click", () => clearAllLocal());
 document.getElementById("deleteFiltered").addEventListener("click", () => deleteFiltered());
 document.getElementById("mergeTaxonomy").addEventListener("click", () => mergeTaxonomy());
@@ -79,10 +82,15 @@ chrome.storage.session.onChanged.addListener((changes) => {
     const missing = ` / 缺标题 ${value.missingTitle || 0} / 缺封面 ${value.missingCover || 0}`;
     const scrollTarget = value.scrollTarget ? ` / 滚动 ${value.scrollTarget}` : "";
     statusEl.textContent = `扫描：${value.status}${value.reason ? ` / ${value.reason}` : ""}，已发现 ${value.knownCount || 0}${expected}${missing}${scrollTarget}`;
+    renderCaptureHealth(value);
+  }
+  if (changes.backgroundJobStatus) {
+    renderBackgroundJobStatus(changes.backgroundJobStatus.newValue);
   }
 });
 
 loadTheme();
+refreshBackgroundStatus();
 refresh();
 setInterval(refresh, 10000);
 
@@ -145,6 +153,7 @@ function describeResponse(payload, response) {
     return `诊断：候选 ${diagnostics.candidateCount || 0} / anchor ${diagnostics.anchorCount || 0} / ${diagnostics.pageType || "unknown"}`;
   }
   if (payload.type === "clearDiagnostics") return "诊断已清空";
+  if (payload.type === "retryBackgroundJobs") return "后台失败项已重新排队";
   return "操作完成";
 }
 
@@ -168,6 +177,12 @@ async function refresh() {
   }
 }
 
+async function refreshBackgroundStatus() {
+  const data = await chrome.storage.session.get(["backgroundJobStatus", "scanStatus"]).catch(() => ({}));
+  if (data.backgroundJobStatus) renderBackgroundJobStatus(data.backgroundJobStatus);
+  if (data.scanStatus) renderCaptureHealth(data.scanStatus);
+}
+
 async function refreshReport() {
   const response = await chrome.runtime.sendMessage({ type: "getReport" }).catch(() => null);
   if (!response || !response.ok) return;
@@ -175,6 +190,57 @@ async function refreshReport() {
   const counts = report.counts || {};
   reportEl.textContent = `本地 ${report.total || 0} 条 · 已分类 ${classifiedCount(currentNotes)} · 已导出 ${counts.archived || 0}`;
   renderEvents([...(report.events || []), ...(report.sessionEvents || [])]);
+  renderStaticHealth(report);
+}
+
+function renderBackgroundJobStatus(job = {}) {
+  if (!job || !job.type) {
+    jobStatusEl.textContent = "后台归档空闲";
+    return;
+  }
+  const failures = job.failures || [];
+  const pending = Number(job.pending || 0);
+  const processed = Number(job.processed || 0);
+  const succeeded = Number(job.succeeded || 0);
+  const reason = job.reason ? ` · ${job.reason}` : "";
+  const failedText = failures.length ? ` · 失败 ${failures.length}（可重试）` : "";
+  if (job.status === "running") {
+    jobStatusEl.textContent = `后台归档中：已处理 ${processed}，成功 ${succeeded}，剩余约 ${pending}${failedText}${reason}`;
+    return;
+  }
+  if (job.status === "failed_items") {
+    const latest = failures[failures.length - 1];
+    jobStatusEl.textContent = `后台归档有失败：${failures.length} 条，最新 ${latest && latest.noteId || "unknown"} / ${latest && latest.error || "unknown"}`;
+    return;
+  }
+  if (job.status === "queued") {
+    jobStatusEl.textContent = `后台归档已排队${reason}`;
+    return;
+  }
+  jobStatusEl.textContent = `后台归档空闲：本轮成功 ${succeeded}${failedText}`;
+}
+
+function renderCaptureHealth(scan = {}) {
+  const expected = Number(scan.expectedTotal || 0);
+  const known = Number(scan.knownCount || 0);
+  const missingTitle = Number(scan.missingTitle || 0);
+  const missingCover = Number(scan.missingCover || 0);
+  const missingUrl = Number(scan.missingUrl || 0);
+  const coverage = expected ? `${Math.min(100, Math.round(known / expected * 1000) / 10)}%` : "未知";
+  const warning = missingTitle || missingCover || missingUrl ? ` · 缺字段 标题${missingTitle}/封面${missingCover}/链接${missingUrl}` : " · 字段完整";
+  captureHealthEl.textContent = `采集健康：覆盖 ${coverage}${expected ? `（${known}/${expected}）` : `（已发现 ${known}）`}${warning}`;
+}
+
+function renderStaticHealth(report = {}) {
+  if (!currentNotes.length) {
+    captureHealthEl.textContent = "采集健康：等待扫描";
+    return;
+  }
+  const missingTitle = currentNotes.filter((note) => !note.title).length;
+  const missingCover = currentNotes.filter((note) => !note.cover).length;
+  const missingUrl = currentNotes.filter((note) => !note.url).length;
+  const archived = report.counts && report.counts.archived || currentNotes.filter((note) => note.markdownPath).length;
+  captureHealthEl.textContent = `采集健康：本地 ${currentNotes.length} · 已归档 ${archived} · 缺字段 标题${missingTitle}/封面${missingCover}/链接${missingUrl}`;
 }
 
 function renderEvents(events) {
@@ -220,7 +286,7 @@ async function refreshTaxonomy() {
   if (pending.length) {
     const title = document.createElement("div");
     title.className = "taxonomyGroupTitle";
-    title.textContent = "待审新增";
+    title.textContent = "待审新增：需要批准、拒绝或合并后才会进入受控分类";
     taxonomyListEl.appendChild(title);
   }
   for (const item of pending.slice(0, 8)) {
@@ -461,7 +527,7 @@ function needsAiClassification(note) {
 function classificationLabel(note, classification) {
   if (classification.error) return `AI异常：${classification.error}`;
   if (classification.pending && classification.proposedPath.length) {
-    return `待审：${classification.proposedPath.join(" / ")}`;
+    return `分类待审：${classification.proposedPath.join(" / ")}（在分类治理中批准或合并）`;
   }
   return classification.path.join(" / ");
 }
@@ -572,7 +638,7 @@ async function rejectPendingTaxonomy(key) {
 
 async function exportAll() {
   const result = await chrome.runtime.sendMessage({ type: "exportAll" }).catch((error) => ({ ok: false, error: error.message }));
-  statusEl.textContent = result.ok ? `已导出 ${result.count} 条：${result.indexPath}` : `导出失败：${result.error}`;
+  statusEl.textContent = result.ok ? `全部数据备份已导出 ${result.count} 条：${result.indexPath}` : `导出失败：${result.error}`;
   await refresh();
 }
 
