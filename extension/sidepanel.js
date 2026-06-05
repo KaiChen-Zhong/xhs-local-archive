@@ -21,6 +21,11 @@ const themeEl = document.getElementById("theme");
 let currentNotes = [];
 let renderedNotes = [];
 let activeCategoryPath = [];
+let renderLimit = 160;
+let refreshInFlight = false;
+const viewCache = new Map();
+const INITIAL_RENDER_LIMIT = 160;
+const RENDER_INCREMENT = 160;
 
 document.getElementById("captureNow").addEventListener("click", () => send({ type: "captureNow" }));
 document.getElementById("startScan").addEventListener("click", () => send({
@@ -63,8 +68,8 @@ document.getElementById("clearAllLocal").addEventListener("click", () => clearAl
 document.getElementById("deleteFiltered").addEventListener("click", () => deleteFiltered());
 document.getElementById("mergeTaxonomy").addEventListener("click", () => mergeTaxonomy());
 document.getElementById("lockCurrentTaxonomy").addEventListener("click", () => lockCurrentTaxonomy());
-searchEl.addEventListener("input", () => render(currentNotes));
-statusFilterEl.addEventListener("change", () => render(currentNotes));
+searchEl.addEventListener("input", () => render(currentNotes, { resetLimit: true }));
+statusFilterEl.addEventListener("change", () => render(currentNotes, { resetLimit: true }));
 themeEl.addEventListener("change", () => saveTheme(themeEl.value));
 
 chrome.storage.session.onChanged.addListener((changes) => {
@@ -79,7 +84,7 @@ chrome.storage.session.onChanged.addListener((changes) => {
 
 loadTheme();
 refresh();
-setInterval(refresh, 5000);
+setInterval(refresh, 10000);
 
 async function send(payload) {
   const response = await chrome.runtime.sendMessage(payload).catch((error) => ({ ok: false, error: error.message }));
@@ -144,16 +149,23 @@ function describeResponse(payload, response) {
 }
 
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   const response = await chrome.runtime.sendMessage({ type: "listNotes" }).catch((error) => ({ ok: false, error: error.message }));
-  if (!response.ok) {
-    statusEl.textContent = `列表读取失败：${response.error}`;
-    return;
+  try {
+    if (!response.ok) {
+      statusEl.textContent = `列表读取失败：${response.error}`;
+      return;
+    }
+    currentNotes = response.notes || [];
+    pruneViewCache(currentNotes);
+    render(currentNotes);
+    refreshReport();
+    refreshInsights();
+    refreshTaxonomy();
+  } finally {
+    refreshInFlight = false;
   }
-  currentNotes = response.notes || [];
-  render(currentNotes);
-  refreshReport();
-  refreshInsights();
-  refreshTaxonomy();
 }
 
 async function refreshReport() {
@@ -249,7 +261,8 @@ async function refreshTaxonomy() {
   }
 }
 
-function render(notes) {
+function render(notes, options = {}) {
+  if (options.resetLimit) renderLimit = INITIAL_RENDER_LIMIT;
   notesEl.textContent = "";
   renderCategoryNav(notes);
   renderedNotes = filterNotes(notes);
@@ -257,54 +270,75 @@ function render(notes) {
     notesEl.innerHTML = "<p class=\"empty\">未发现帖子。打开小红书收藏/点赞页后点击采集。</p>";
     return;
   }
-  for (const note of renderedNotes) {
-    const node = template.content.firstElementChild.cloneNode(true);
-    const img = node.querySelector(".cover");
-    img.src = note.cover || "";
-    img.hidden = !note.cover;
-    const coverLink = node.querySelector(".coverLink");
-    coverLink.disabled = !note.url;
-    coverLink.title = note.url ? "在小红书中打开" : "缺少可用链接";
-    coverLink.addEventListener("click", () => send({ type: "openNote", url: note.url || "" }));
-    node.querySelector(".statusBadge").textContent = statusLabel(note);
-    node.querySelector("h2").textContent = note.title || note.noteId;
-    node.querySelector(".meta").textContent = `${note.author || "unknown"} · ${note.source || "unknown"}`;
-    const classification = classificationOf(note);
-    const classificationEl = node.querySelector(".classification");
-    classificationEl.textContent = classificationLabel(note, classification);
-    if (classification.pending) classificationEl.classList.add("pending");
-    if (classification.error) classificationEl.classList.add("error");
-    node.querySelector(".complete").textContent = completenessText(note);
-    const pathInput = node.querySelector(".pathInput");
-    pathInput.value = classification.path.join("/");
-    node.querySelector(".classifyOne").addEventListener("click", () => send({ type: "classifyNote", noteId: note.noteId }));
-    node.querySelector(".saveClassification").addEventListener("click", () => send({
-      type: "updateClassification",
-      noteId: note.noteId,
-      classification: {
-        categoryPath: parsePath(pathInput.value)
-      }
-    }));
-    const archiveButton = node.querySelector(".archive");
-    archiveButton.disabled = false;
-    archiveButton.title = "导出标题、封面、分类卡片";
-    archiveButton.addEventListener("click", () => send({ type: "archiveNote", noteId: note.noteId }));
-    node.querySelector(".deleteOne").addEventListener("click", () => deleteNotes([note.noteId]));
-    notesEl.appendChild(node);
+  const visibleNotes = renderedNotes.slice(0, renderLimit);
+  const fragment = document.createDocumentFragment();
+  for (const note of visibleNotes) {
+    fragment.appendChild(renderNoteCard(note));
   }
+  notesEl.appendChild(fragment);
+  if (visibleNotes.length < renderedNotes.length) renderLoadMore(visibleNotes.length, renderedNotes.length);
+}
+
+function renderNoteCard(note) {
+  const node = template.content.firstElementChild.cloneNode(true);
+  const img = node.querySelector(".cover");
+  img.src = note.cover || "";
+  img.hidden = !note.cover;
+  const coverLink = node.querySelector(".coverLink");
+  coverLink.disabled = !note.url;
+  coverLink.title = note.url ? "在小红书中打开" : "缺少可用链接";
+  coverLink.addEventListener("click", () => send({ type: "openNote", url: note.url || "" }));
+  node.querySelector(".statusBadge").textContent = statusLabel(note);
+  node.querySelector("h2").textContent = note.title || note.noteId;
+  node.querySelector(".meta").textContent = `${note.author || "unknown"} · ${note.source || "unknown"}`;
+  const classification = classificationOf(note);
+  const classificationEl = node.querySelector(".classification");
+  classificationEl.textContent = classificationLabel(note, classification);
+  if (classification.pending) classificationEl.classList.add("pending");
+  if (classification.error) classificationEl.classList.add("error");
+  node.querySelector(".complete").textContent = completenessText(note);
+  const pathInput = node.querySelector(".pathInput");
+  pathInput.value = classification.path.join("/");
+  node.querySelector(".classifyOne").addEventListener("click", () => send({ type: "classifyNote", noteId: note.noteId }));
+  node.querySelector(".saveClassification").addEventListener("click", () => send({
+    type: "updateClassification",
+    noteId: note.noteId,
+    classification: {
+      categoryPath: parsePath(pathInput.value)
+    }
+  }));
+  const archiveButton = node.querySelector(".archive");
+  archiveButton.disabled = false;
+  archiveButton.title = "导出标题、封面、分类卡片";
+  archiveButton.addEventListener("click", () => send({ type: "archiveNote", noteId: note.noteId }));
+  node.querySelector(".deleteOne").addEventListener("click", () => deleteNotes([note.noteId]));
+  return node;
+}
+
+function renderLoadMore(visible, total) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "loadMore";
+  const button = document.createElement("button");
+  button.textContent = `继续显示 ${Math.min(RENDER_INCREMENT, total - visible)} 条（${visible}/${total}）`;
+  button.addEventListener("click", () => {
+    renderLimit += RENDER_INCREMENT;
+    render(currentNotes);
+  });
+  wrapper.appendChild(button);
+  notesEl.appendChild(wrapper);
 }
 
 function filterNotes(notes) {
   const keyword = searchEl.value.trim().toLowerCase();
   const status = statusFilterEl.value;
   return notes.filter((note) => {
-    const noteStatus = statusOf(note);
-    const classification = classificationOf(note);
+    const view = noteView(note);
+    const noteStatus = view.status;
+    const classification = view.classification;
     if (status && noteStatus !== status) return false;
     if (!pathStartsWith(classification.path, activeCategoryPath)) return false;
     if (!keyword) return true;
-    const haystack = `${note.title || ""} ${note.author || ""} ${note.noteId || ""} ${classification.path.join(" ")}`.toLowerCase();
-    return haystack.includes(keyword);
+    return view.searchText.includes(keyword);
   });
 }
 
@@ -312,7 +346,7 @@ function renderCategoryNav(notes) {
   categoryTrailEl.textContent = activeCategoryPath.length ? `全部分类 / ${activeCategoryPath.join(" / ")}` : "全部分类";
   categoryTrailEl.onclick = () => {
     activeCategoryPath = [];
-    render(currentNotes);
+    render(currentNotes, { resetLimit: true });
   };
   if (activeCategoryPath.length && !mergeToEl.value) mergeToEl.value = activeCategoryPath.join("/");
   categoryChildrenEl.textContent = "";
@@ -321,7 +355,7 @@ function renderCategoryNav(notes) {
     up.textContent = "上一级";
     up.addEventListener("click", () => {
       activeCategoryPath = activeCategoryPath.slice(0, -1);
-      render(currentNotes);
+      render(currentNotes, { resetLimit: true });
     });
     categoryChildrenEl.appendChild(up);
   }
@@ -330,7 +364,7 @@ function renderCategoryNav(notes) {
     button.textContent = `${item.name} (${item.count})`;
     button.addEventListener("click", () => {
       activeCategoryPath = [...activeCategoryPath, item.name].slice(0, 5);
-      render(currentNotes);
+      render(currentNotes, { resetLimit: true });
     });
     categoryChildrenEl.appendChild(button);
   }
@@ -339,7 +373,7 @@ function renderCategoryNav(notes) {
 function nextCategoryEntries(notes, prefix) {
   const counts = {};
   for (const note of notes) {
-    const path = classificationOf(note).path;
+    const path = noteView(note).classification.path;
     if (!pathStartsWith(path, prefix)) continue;
     const next = path[prefix.length];
     if (!next) continue;
@@ -355,6 +389,53 @@ function pathStartsWith(path, prefix) {
 }
 
 function classificationOf(note) {
+  return noteView(note).classification;
+}
+
+function noteView(note) {
+  const key = viewCacheKey(note);
+  const cached = viewCache.get(note.noteId);
+  if (cached && cached.key === key) return cached.view;
+  const classification = computeClassification(note);
+  const tags = Array.isArray(note.ai && note.ai.tags) ? note.ai.tags.slice(0, 12) : [];
+  const status = statusOfRaw(note);
+  const view = {
+    classification,
+    tags,
+    status,
+    classified: classification.path.join("/") !== "未分类/待细分",
+    searchText: `${note.title || ""} ${note.author || ""} ${note.noteId || ""} ${classification.path.join(" ")} ${classification.proposedPath.join(" ")} ${tags.join(" ")}`.toLowerCase()
+  };
+  viewCache.set(note.noteId, { key, view });
+  return view;
+}
+
+function viewCacheKey(note) {
+  const ai = note.ai || {};
+  return [
+    note.noteId || "",
+    note.updatedAt || note.createdAt || "",
+    note.markdownPath || "",
+    note.unavailableReason || "",
+    Array.isArray(ai.categoryPath) ? ai.categoryPath.join("/") : "",
+    Array.isArray(ai.proposedCategoryPath) ? ai.proposedCategoryPath.join("/") : "",
+    Array.isArray(ai.tags) ? ai.tags.join("/") : "",
+    ai.category || "",
+    ai.subcategory || "",
+    ai.providerError || "",
+    ai.taxonomyPending ? "pending" : ""
+  ].join("|");
+}
+
+function pruneViewCache(notes) {
+  if (viewCache.size < 20000) return;
+  const ids = new Set(notes.map((note) => note.noteId).filter(Boolean));
+  for (const id of viewCache.keys()) {
+    if (!ids.has(id)) viewCache.delete(id);
+  }
+}
+
+function computeClassification(note) {
   const ai = note.ai || {};
   const path = parsePath(ai.categoryPath || ai.path || [ai.category, ai.subcategory]);
   const fallback = inferTaxonomy(note).path;
@@ -410,6 +491,10 @@ function inferTaxonomy(note) {
 }
 
 function statusOf(note) {
+  return noteView(note).status;
+}
+
+function statusOfRaw(note) {
   if (note.markdownPath) return "archived";
   return "discovered";
 }
@@ -426,7 +511,7 @@ function isArchivable(note) {
 
 function completenessText(note) {
   const cover = note.cover ? "封面:有" : "封面:无";
-  const classification = classificationOf(note);
+  const classification = noteView(note).classification;
   const classified = classification.pending ? "分类:待审" : classification.path.join("/") === "未分类/待细分" ? "分类:待定" : "分类:有";
   const markdown = note.markdownPath ? "MD:有" : "MD:无";
   return `${cover} · ${classified} · ${markdown}`;
@@ -548,5 +633,5 @@ function escapeHtml(value) {
 }
 
 function classifiedCount(notes) {
-  return notes.filter((note) => classificationOf(note).path.join("/") !== "未分类/待细分").length;
+  return notes.filter((note) => noteView(note).classified).length;
 }

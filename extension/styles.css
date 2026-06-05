@@ -608,6 +608,21 @@ h2 {
   text-align: center;
 }
 
+.loadMore {
+  display: block;
+  column-span: all;
+  margin: 2px 2px 14px;
+  text-align: center;
+}
+
+.loadMore button {
+  width: 100%;
+  min-height: 42px;
+  border-style: dashed;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+}
+
 .diagnostics {
   margin: 2px 12px 12px;
   padding: 10px;
