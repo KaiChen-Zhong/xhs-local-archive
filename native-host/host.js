@@ -517,6 +517,7 @@ function buildReport(db) {
     archiveRoot,
     total: notes.length,
     classified: notes.filter((note) => classificationOf(note).path.join("/") !== "未分类/待细分").length,
+    unclassified: notes.filter((note) => classificationOf(note).path.join("/") === "未分类/待细分").length,
     counts,
     events: (db.events || []).slice(-20)
   };
@@ -711,7 +712,8 @@ function manualValidationPrerequisites(db) {
 function classifiedNotes(db) {
   return Object.values(db.notes || {}).filter((note) => {
     const ai = note.ai || {};
-    return normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]).length > 0;
+    const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
+    return path.length > 0 && pathKey(path) !== "未分类/待细分";
   });
 }
 

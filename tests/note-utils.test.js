@@ -278,11 +278,24 @@ test("native host blocks private media URLs during archive", async () => {
 });
 
 test("native host report includes counts and archive root", async () => {
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  assert.equal((await handleMessage({
+    type: "upsertNotes",
+    notes: [{
+      noteId: `report-unclassified-${Date.now()}`,
+      title: "report unclassified",
+      url: "https://www.xiaohongshu.com/explore/report-unclassified",
+      ai: { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
+    }]
+  })).ok, true);
   const report = await handleMessage({ type: "getReport" });
   assert.equal(report.ok, true);
   assert.ok(report.report.archiveRoot);
   assert.ok(Number.isFinite(report.report.total));
   assert.equal(typeof report.report.counts, "object");
+  assert.equal(report.report.classified, 0);
+  assert.equal(report.report.unclassified, 1);
 });
 
 test("native host uses OpenAI-compatible settings when archiving", async () => {

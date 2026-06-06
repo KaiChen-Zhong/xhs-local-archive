@@ -73,7 +73,9 @@ async function handleMessage(message, sender) {
 
   if (message.type === "listNotes") {
     const localNotes = await listLocal();
-    const native = await sendNative({ type: "listNotes" }).catch(() => null);
+    let native = await sendNative({ type: "listNotes" }).catch(() => null);
+    const classificationRecovery = native && native.ok ? await recoverNativeUnclassifiedNotes(native.notes || [], "list_notes") : null;
+    if (classificationRecovery && classificationRecovery.native) native = classificationRecovery.native;
     const repair = native && native.ok ? await repairLocalCacheFromNative(localNotes, native.notes || [], { reason: "list_notes" }) : null;
     const notes = repair && repair.ok ? repair.notes : localNotes;
     const failedIds = new Set(autoArchiveFailures.map((item) => item.noteId).filter(Boolean));
@@ -88,14 +90,22 @@ async function handleMessage(message, sender) {
         staleUnclassified: repair.staleUnclassified,
         missingCover: repair.missingCover,
         missingNativeFields: repair.missingNativeFields
+      } : null,
+      classificationRecovery: classificationRecovery ? {
+        recovered: Boolean(classificationRecovery.recovered),
+        unclassifiedBefore: classificationRecovery.unclassifiedBefore,
+        succeeded: classificationRecovery.succeeded,
+        failed: classificationRecovery.failed
       } : null
     };
   }
 
   if (message.type === "repairLocalCache") {
     const localNotes = await listLocal().catch(() => []);
-    const native = await sendNative({ type: "listNotes" }).catch((error) => ({ ok: false, error: error.message }));
+    let native = await sendNative({ type: "listNotes" }).catch((error) => ({ ok: false, error: error.message }));
     if (!native || !native.ok) return { ok: false, error: native && native.error || "native_list_failed" };
+    const classificationRecovery = await recoverNativeUnclassifiedNotes(native.notes || [], message.reason || "manual_repair");
+    if (classificationRecovery && classificationRecovery.native) native = classificationRecovery.native;
     const repair = await repairLocalCacheFromNative(localNotes, native.notes || [], {
       force: Boolean(message.force),
       reason: message.reason || "manual_repair"
@@ -106,7 +116,13 @@ async function handleMessage(message, sender) {
       total: repair.notes.length,
       staleUnclassified: repair.staleUnclassified,
       missingCover: repair.missingCover,
-      missingNativeFields: repair.missingNativeFields
+      missingNativeFields: repair.missingNativeFields,
+      classificationRecovery: classificationRecovery ? {
+        recovered: Boolean(classificationRecovery.recovered),
+        unclassifiedBefore: classificationRecovery.unclassifiedBefore,
+        succeeded: classificationRecovery.succeeded,
+        failed: classificationRecovery.failed
+      } : null
     };
   }
 
@@ -857,6 +873,41 @@ async function syncLocalNotesToNative() {
   }
   const result = await sendNative({ type: "upsertNotes", notes: localNotes }).catch((error) => ({ ok: false, error: error.message }));
   return { ok: Boolean(result && result.ok), count: localNotes.length, error: result && result.error || "" };
+}
+
+async function recoverNativeUnclassifiedNotes(nativeNotes, reason) {
+  const unclassifiedBefore = (nativeNotes || []).filter((note) => isUnclassifiedAiLocal(note && note.ai)).length;
+  if (!unclassifiedBefore) return { recovered: false, unclassifiedBefore: 0, succeeded: 0, failed: 0, native: null };
+  const result = await sendNative({
+    type: "classifyAll",
+    forceUnclassified: true,
+    prefillOnly: true
+  }).catch((error) => ({ ok: false, error: error.message }));
+  await appendEvent(result && result.ok ? "info" : "error", "native_unclassified_recovery", {
+    reason: reason || "",
+    unclassifiedBefore,
+    ok: Boolean(result && result.ok),
+    succeeded: Number(result && result.succeeded || 0),
+    failed: Number(result && result.failed || 0),
+    error: result && result.error || ""
+  });
+  if (!result || !result.ok) {
+    return {
+      recovered: false,
+      unclassifiedBefore,
+      succeeded: 0,
+      failed: unclassifiedBefore,
+      native: null
+    };
+  }
+  const refreshed = await sendNative({ type: "listNotes" }).catch(() => null);
+  return {
+    recovered: true,
+    unclassifiedBefore,
+    succeeded: Number(result.succeeded || 0),
+    failed: Number(result.failed || 0),
+    native: refreshed && refreshed.ok ? refreshed : null
+  };
 }
 
 async function repairLocalCacheFromNative(localNotes, nativeNotes, options = {}) {

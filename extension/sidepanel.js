@@ -98,6 +98,10 @@ setInterval(refresh, 10000);
 async function initialize() {
   await refreshBackgroundStatus();
   const repair = await chrome.runtime.sendMessage({ type: "repairLocalCache", reason: "sidepanel_load" }).catch(() => null);
+  const recovered = repair && repair.classificationRecovery && repair.classificationRecovery.recovered;
+  if (recovered) {
+    statusEl.textContent = `未分类已自动整理：${repair.classificationRecovery.succeeded || 0}/${repair.classificationRecovery.unclassifiedBefore || 0}`;
+  }
   if (repair && repair.ok && repair.rebuilt) {
     statusEl.textContent = `本地缓存已修复：${repair.total || 0} 条 / 补封面 ${repair.missingCover || 0} / 修正未分类 ${repair.staleUnclassified || 0}`;
   }
@@ -182,6 +186,9 @@ async function refresh() {
       return;
     }
     currentNotes = response.notes || [];
+    if (response.classificationRecovery && response.classificationRecovery.recovered) {
+      statusEl.textContent = `未分类已自动整理：${response.classificationRecovery.succeeded || 0}/${response.classificationRecovery.unclassifiedBefore || 0}`;
+    }
     if (response.cacheRepair && response.cacheRepair.rebuilt) {
       statusEl.textContent = `本地缓存已同步：补封面 ${response.cacheRepair.missingCover || 0} / 修正未分类 ${response.cacheRepair.staleUnclassified || 0}`;
     }

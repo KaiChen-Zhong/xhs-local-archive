@@ -307,9 +307,42 @@ async function main() {
   assert.equal(repairedList.notes[0].cover, "https://img.example/native-cover.jpg");
   assert.equal(repairedList.notes[0].ai.categoryPath.join("/"), "生活/日常记录");
 
+  let recoveryClassified = false;
+  const recoveryHarness = createHarness({
+    nativeHandler(payload) {
+      if (payload.type === "listNotes") {
+        return {
+          ok: true,
+          notes: [{
+            noteId: "native-unclassified-1",
+            title: "Codex 和 AI 工具",
+            url: "https://www.xiaohongshu.com/explore/native-unclassified-1",
+            cover: "https://img.example/native-unclassified.jpg",
+            ai: recoveryClassified
+              ? { categoryPath: ["科技", "AI工具"], category: "科技", subcategory: "AI工具", source: "local_prefill" }
+              : { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
+          }]
+        };
+      }
+      if (payload.type === "classifyAll") {
+        assert.equal(payload.forceUnclassified, true);
+        assert.equal(payload.prefillOnly, true);
+        recoveryClassified = true;
+        return { ok: true, mode: "prefill", processed: 1, succeeded: 1, failed: 0 };
+      }
+      if (payload.type === "logDiagnostic") return { ok: true };
+      return { ok: true };
+    }
+  });
+  const recoveredList = await recoveryHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(recoveredList.ok, true, JSON.stringify(recoveredList));
+  assert.equal(recoveredList.classificationRecovery.recovered, true, JSON.stringify(recoveredList));
+  assert.equal(recoveredList.classificationRecovery.unclassifiedBefore, 1, JSON.stringify(recoveredList));
+  assert.equal(recoveredList.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
+
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal", "repairLocalCacheRestoresNativeFields"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal", "repairLocalCacheRestoresNativeFields", "nativeUnclassifiedAutoRecovery"]
   }, null, 2));
 }
 
