@@ -213,6 +213,8 @@ async function handleMessage(message) {
     const ai = await buildAi(note, db.settings, db.taxonomy);
     const governed = governClassification(db, ai, { source: ai.source || "ai", noteId: note.noteId });
     note.ai = { ...(note.ai || {}), ...governed };
+    clearClassificationIncomplete(note);
+    if (isUnclassifiedPath(note)) markClassificationIncomplete(note);
     note.updatedAt = new Date().toISOString();
     db.notes[note.noteId] = note;
     logEvent(db, "info", "classify_note", { noteId: note.noteId, category: governed.category, subcategory: governed.subcategory });
@@ -243,10 +245,17 @@ async function handleMessage(message) {
           const ai = await buildAi(note, db.settings, db.taxonomy);
           const governed = governClassification(db, ai, { source: ai.source || "ai", noteId: note.noteId });
           note.ai = { ...(note.ai || {}), ...governed };
+          clearClassificationIncomplete(note);
           note.updatedAt = new Date().toISOString();
           db.notes[note.noteId] = note;
-          succeeded += 1;
-          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
+          if (isUnclassifiedPath(note)) {
+            failed += 1;
+            markClassificationIncomplete(note);
+            if (index < detailLimit) results[index] = { noteId: note.noteId, ok: false, error: "classification_still_unclassified", categoryPath: governed.categoryPath };
+          } else {
+            succeeded += 1;
+            if (index < detailLimit) results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
+          }
         } catch (error) {
           failed += 1;
           if (index < detailLimit) results[index] = { noteId: note.noteId, ok: false, error: error.message };
@@ -881,6 +890,20 @@ function isUnclassifiedPath(note) {
   return !path.length || pathKey(path) === "未分类/待细分";
 }
 
+function markClassificationIncomplete(note) {
+  note.ai = {
+    ...(note.ai || {}),
+    classificationIncomplete: true,
+    providerError: note.ai && note.ai.providerError || "classification_still_unclassified"
+  };
+}
+
+function clearClassificationIncomplete(note) {
+  if (!note || !note.ai) return;
+  delete note.ai.classificationIncomplete;
+  if (note.ai.providerError === "classification_still_unclassified") delete note.ai.providerError;
+}
+
 function normalizeClassification(value = {}, fallback = { path: ["未分类", "待细分"] }) {
   const fallbackPath = normalizeCategoryPath(fallback.path || [fallback.category, fallback.subcategory]);
   const suppliedPath = normalizeCategoryPath(value.categoryPath || value.path || value.categories);
@@ -1022,6 +1045,15 @@ function canonicalizeCategoryPath(db, path) {
 
 function governClassification(db, classification, options = {}) {
   const normalized = normalizeClassification(classification || {});
+  if (pathKey(normalized.categoryPath) === "未分类/待细分" && options.noteId && db.notes && db.notes[options.noteId]) {
+    const inferred = inferTaxonomy(db.notes[options.noteId]).path;
+    if (pathKey(inferred) !== "未分类/待细分") {
+      normalized.path = inferred;
+      normalized.categoryPath = inferred;
+      normalized.category = inferred[0] || "未分类";
+      normalized.subcategory = inferred[1] || "待细分";
+    }
+  }
   const source = options.source || normalized.source || "auto";
   const resolved = resolveControlledPath(db, normalized.categoryPath, { source, noteId: options.noteId });
   let canonicalPath = resolved.path;
@@ -1398,9 +1430,9 @@ function inferTaxonomy(note) {
     [/家居|装修|收纳|软装|租房|房间|卧室|客厅/, ["家居", "装修收纳"]],
     [/健身|瑜伽|跑步|普拉提|减脂|运动|训练/, ["健康", "运动健身"]],
     [/学习|读书|考研|英语|笔记|效率|自律|课程/, ["学习", "知识成长"]],
-    [/大模型|agent|rag|prompt|提示词|ai工具|openai|claude|deepseek|mcp|llm/, ["科技", "AI工具"]],
-    [/数码|手机|电脑|软件|app|相机|键盘|耳机/, ["科技", "数码工具"]],
-    [/股票|美股|港股|a股|基金|etf|券商|开户|做空|财报|半导体|牛市|熊市|量价|当冲/, ["金融", "股票基金"]],
+    [/大模型|agent|rag|prompt|提示词|ai工具|openai|claude|deepseek|mcp|llm|anthropic|opus|sonnet|mythos|transformer|codex|vibe\s*coding|cursor|copilot|gpt|gemini|模型|ai产品|人工智能|机器学习|神经网络/, ["科技", "AI工具"]],
+    [/数码|手机|电脑|软件|app|相机|键盘|耳机|域名|开源|星标|github|系统|模拟器|浏览器|服务器|数据库|代码|编程|程序员|开发|产品经理|互联网/, ["科技", "数码工具"]],
+    [/股票|股市|熔断|三星|海力士|美股|港股|a股|基金|etf|券商|开户|做空|财报|半导体|牛市|熊市|量价|当冲|指数|估值|科技股|芯片|英伟达|nvidia/, ["金融", "股票基金"]],
     [/宏观|美联储|降息|加息|美元|汇率|通胀|经济|财富风口|财经|理财|投资/, ["金融", "宏观财经"]],
     [/求职|简历|面试|职场|工作|办公|副业|运营|创业/, ["职场", "求职办公"]],
     [/设计|审美|灵感|排版|配色|海报|字体/, ["审美", "设计灵感"]],
@@ -1412,7 +1444,11 @@ function inferTaxonomy(note) {
     [/身份证|证件|诈骗|防骗|法律|合同|安全|燃气|用电|保命|避坑|维权/, ["安全", "法律证件"]],
     [/原生家庭|亲密关系|情绪|心理|分手|婚姻/, ["情感", "家庭关系"]],
     [/母婴|宝宝|儿童|育儿|亲子/, ["生活", "母婴亲子"]],
-    [/宠物|猫|狗|猫咪|狗狗/, ["生活", "宠物日常"]]
+    [/宠物|猫|狗|猫咪|狗狗|小猫|小狗|喵|汪|铲屎|毛孩子/, ["生活", "宠物日常"]],
+    [/搞笑|笑疯|离谱|名场面|热梗|梗图|段子|抽象|整活|尖叫鸡/, ["娱乐", "日常娱乐"]],
+    [/地铁|公交|报站|城市|深圳|北京|上海|广州|厦门|香港|进藏|自驾|路线/, ["旅行", "目的地攻略"]],
+    [/烧烤|吃吃吃|火锅|奶茶|餐|饭|菜|外卖|小吃|美食/, ["美食", "餐厅探店"]],
+    [/装修|隔音|收纳|卧室|客厅|租房|户型|软装|全屋|家务/, ["家居", "装修收纳"]]
   ];
   for (const [pattern, path] of rules) {
     if (pattern.test(text)) return { path };

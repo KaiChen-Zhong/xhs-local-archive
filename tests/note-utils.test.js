@@ -707,6 +707,68 @@ test("native host classifyAll retries existing unclassified AI records", async (
   assert.notDeepEqual(listed.notes[0].ai.categoryPath, ["未分类", "待细分"]);
 });
 
+test("local fallback classifies common tech and finance titles instead of unclassified", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  const titles = [
+    ["anthropic-title", "Opus 4.8 和 Mythos 1 同时现身：Anthropic", "科技/AI工具"],
+    ["stocks-title", "#韩国股市 #韩国股市熔断 #三星 #海力士", "金融/股票基金"],
+    ["transformer-title", "我受够了Transformer！连续思维机器：CTM", "科技/AI工具"],
+    ["codex-title", "Codex 现在能直接跑 iOS 模拟器了", "科技/AI工具"],
+    ["pm-title", "AI产品经理立项 | 大厂70%AI项目栽这5个坑", "科技/AI工具"]
+  ];
+  const notes = titles.map(([id, title]) => ({
+    noteId: `${id}-${Date.now()}`,
+    title,
+    url: `https://www.xiaohongshu.com/explore/${id}`,
+    ai: {
+      categoryPath: ["未分类", "待细分"],
+      category: "未分类",
+      subcategory: "待细分",
+      summary: "旧的未分类结果",
+      source: "local"
+    }
+  }));
+  assert.equal((await handleMessage({ type: "upsertNotes", notes })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", concurrency: 2 });
+  assert.equal(classified.ok, true);
+  assert.equal(classified.succeeded, titles.length);
+  const listed = await handleMessage({ type: "listNotes" });
+  for (const [, title, expectedPath] of titles) {
+    const note = listed.notes.find((item) => item.title === title);
+    assert.equal(note.ai.categoryPath.join("/"), expectedPath);
+  }
+});
+
+test("native host classifyAll does not count unresolved unclassified records as success", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  const note = {
+    noteId: `still-unclassified-${Date.now()}`,
+    title: "随手收藏",
+    cover: "https://img.example/unknown.jpg",
+    url: "https://www.xiaohongshu.com/explore/still-unclassified",
+    ai: {
+      categoryPath: ["未分类", "待细分"],
+      category: "未分类",
+      subcategory: "待细分",
+      source: "local"
+    }
+  };
+  assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", concurrency: 2 });
+  assert.equal(classified.ok, true);
+  assert.equal(classified.processed, 1);
+  assert.equal(classified.succeeded, 0);
+  assert.equal(classified.failed, 1);
+  const listed = await handleMessage({ type: "listNotes" });
+  assert.equal(listed.notes[0].ai.categoryPath.join("/"), "未分类/待细分");
+  assert.equal(listed.notes[0].ai.classificationIncomplete, true);
+  assert.equal(listed.notes[0].ai.providerError, "classification_still_unclassified");
+});
+
 test("native host governs taxonomy with lock and merge", async () => {
   const source = {
     noteId: `tax-source-${Date.now()}`,

@@ -121,6 +121,8 @@ async function handleMessage(message, sender) {
     await appendEvent(result.ok ? "info" : "error", "classify_all", {
       ok: Boolean(result.ok),
       count: Number.isFinite(result.processed) ? result.processed : (result.results || []).length,
+      succeeded: Number(result.succeeded || 0),
+      failed: Number(result.failed || 0),
       error: result.error || ""
     });
     if (result.ok) queueAutoArchive("classify_all");

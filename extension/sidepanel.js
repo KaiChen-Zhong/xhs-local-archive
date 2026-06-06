@@ -127,13 +127,16 @@ function describeResponse(payload, response) {
     const results = response.results || [];
     const processed = Number.isFinite(response.processed) ? response.processed : results.length;
     const succeeded = Number.isFinite(response.succeeded) ? response.succeeded : results.filter((item) => item.ok).length;
+    const failed = Number.isFinite(response.failed) ? response.failed : results.filter((item) => !item.ok).length;
+    const failureText = failed ? ` / 失败 ${failed} 条，需重试或手动细分` : "";
     const truncated = response.truncatedResults ? " / 明细已截断，列表已刷新" : "";
-    return `批量分类：${succeeded}/${processed} 成功${truncated}`;
+    return `批量分类：${succeeded}/${processed} 成功${failureText}${truncated}`;
   }
   if (payload.type === "classifyNote") {
     const ai = response.note && response.note.ai || {};
     const proposed = parsePath(ai.proposedCategoryPath || []);
     const path = parsePath(ai.categoryPath || []);
+    if (ai.classificationIncomplete) return `AI 未能有效分类：${ai.providerError || "classification_incomplete"}`;
     if (ai.providerError) return `AI 异常，已用本地规则：${ai.providerError}`;
     if (ai.taxonomyPending && proposed.length) return `AI 分类待审：${proposed.join(" / ")}`;
     if (ai.aiPipeline && ai.aiPipeline.mode === "dual") return `AI 融合分类完成：${(path.length ? path : ["未分类", "待细分"]).join(" / ")}`;
