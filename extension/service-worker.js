@@ -111,7 +111,9 @@ async function handleMessage(message, sender) {
   }
 
   if (message.type === "classifyAll") {
-    const result = await sendNative({ type: "classifyAll" });
+    const localBeforeClassify = await listLocal().catch(() => []);
+    if (localBeforeClassify.length) await sendNative({ type: "upsertNotes", notes: localBeforeClassify }).catch(() => null);
+    const result = await sendNative({ type: "classifyAll", forceUnclassified: true });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
       if (native && native.ok) await upsertLocal(native.notes || []);
@@ -307,6 +309,7 @@ async function handleMessage(message, sender) {
   }
 
   if (message.type === "getReport") {
+    await syncLocalNotesToNative();
     const native = await sendNative({ type: "getReport" }).catch(() => null);
     const session = await chrome.storage.session.get(["debugEvents"]);
     if (native && native.ok) {
@@ -323,10 +326,12 @@ async function handleMessage(message, sender) {
   }
 
   if (message.type === "getInsights") {
+    await syncLocalNotesToNative();
     return sendNative({ type: "getInsights" });
   }
 
   if (message.type === "exportAll") {
+    await syncLocalNotesToNative();
     const result = await sendNative({ type: "exportAll" });
     await appendEvent(result.ok ? "info" : "error", "export_all", {
       ok: Boolean(result.ok),
@@ -745,6 +750,13 @@ async function archivePendingCards({ limit, delayMs }) {
     remaining: Math.max(0, allCandidates.length - candidates.length),
     hasMore: allCandidates.length > candidates.length
   };
+}
+
+async function syncLocalNotesToNative() {
+  const localNotes = await listLocal().catch(() => []);
+  if (!localNotes.length) return { ok: true, count: 0 };
+  const result = await sendNative({ type: "upsertNotes", notes: localNotes }).catch((error) => ({ ok: false, error: error.message }));
+  return { ok: Boolean(result && result.ok), count: localNotes.length, error: result && result.error || "" };
 }
 
 function mergeLocalAndNativeNotes(localNotes, nativeNotes) {

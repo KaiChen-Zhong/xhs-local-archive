@@ -519,7 +519,6 @@ function needsAiClassification(note) {
   if (!ai || !Object.keys(ai).length) return true;
   if (ai.providerError) return true;
   if (ai.source === "manual" || ai.source === "merge") return false;
-  if (ai.taxonomyPending) return false;
   const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
   return !path.length || path.join("/") === "未分类/待细分";
 }

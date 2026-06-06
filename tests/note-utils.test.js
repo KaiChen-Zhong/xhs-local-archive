@@ -682,6 +682,31 @@ test("native host classifyAll without limit processes every pending captured not
   assert.equal(archived.ok, true);
 });
 
+test("native host classifyAll retries existing unclassified AI records", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  const note = {
+    noteId: `retry-unclassified-${Date.now()}`,
+    title: "咖啡甜品合集",
+    cover: "https://img.example/coffee.jpg",
+    url: "https://www.xiaohongshu.com/explore/retry-unclassified",
+    ai: {
+      categoryPath: ["未分类", "待细分"],
+      category: "未分类",
+      subcategory: "待细分",
+      summary: "旧的未分类结果",
+      aiPipeline: { mode: "dual" }
+    }
+  };
+  assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", concurrency: 2 });
+  assert.equal(classified.ok, true);
+  assert.equal(classified.processed, 1);
+  const listed = await handleMessage({ type: "listNotes" });
+  assert.notDeepEqual(listed.notes[0].ai.categoryPath, ["未分类", "待细分"]);
+});
+
 test("native host governs taxonomy with lock and merge", async () => {
   const source = {
     noteId: `tax-source-${Date.now()}`,
@@ -922,6 +947,8 @@ test("native host builds insights and exports archive index", async () => {
     ai: { category: "美食", tags: ["咖啡", "甜品"], summary: "summary", highlights: "highlight" }
   };
   assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+  const archived = await handleMessage({ type: "archiveNote", noteId: note.noteId, ai: note.ai });
+  assert.equal(archived.ok, true);
   const insights = await handleMessage({ type: "getInsights" });
   assert.equal(insights.ok, true);
   assert.ok(insights.insights.total >= 1);

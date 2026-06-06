@@ -187,6 +187,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(serviceWorker, /archiveAll.*300000/s);
   assert.doesNotMatch(serviceWorker, /limit:\s*CLASSIFY_ALL_LIMIT/);
   assert.match(serviceWorker, /classifyAll.*12\s*\*\s*60\s*\*\s*60\s*\*\s*1000/s);
+  assert.match(serviceWorker, /type: "classifyAll", forceUnclassified: true/);
+  assert.match(serviceWorker, /function syncLocalNotesToNative/);
   assert.doesNotMatch(serviceWorker, /message\.type === "openHydrate"/);
   assert.doesNotMatch(serviceWorker, /checkHydrateOpenCooldown/);
   assert.doesNotMatch(serviceWorker, /hydrate_open_cooldown/);
@@ -198,6 +200,8 @@ test("extension keeps conservative scan and long archive safeguards", () => {
   assert.match(nativeHost, /type === "logDiagnostic"/);
   assert.match(nativeHost, /reusableAiForArchive\(note\.ai\)/);
   assert.match(nativeHost, /archiveDirectorySegments\(ai\)/);
+  assert.match(nativeHost, /function isUnclassifiedPath/);
+  assert.match(nativeHost, /pathKey\(path\) === "未分类\/待细分"/);
   assert.doesNotMatch(serviceWorker, /pruneHydrateUrls/);
   assert.match(sidePanelHtml, /id="saveManualValidation" hidden/);
   assert.match(sidePanelHtml, /id="exportSelfTest" hidden/);
