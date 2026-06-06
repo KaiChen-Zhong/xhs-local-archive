@@ -74,13 +74,40 @@ async function handleMessage(message, sender) {
   if (message.type === "listNotes") {
     const localNotes = await listLocal();
     const native = await sendNative({ type: "listNotes" }).catch(() => null);
-    const notes = native && native.ok ? mergeLocalAndNativeNotes(localNotes, native.notes || []) : localNotes;
-    if (native && native.ok) await upsertLocal(notes);
+    const repair = native && native.ok ? await repairLocalCacheFromNative(localNotes, native.notes || [], { reason: "list_notes" }) : null;
+    const notes = repair && repair.ok ? repair.notes : localNotes;
     const failedIds = new Set(autoArchiveFailures.map((item) => item.noteId).filter(Boolean));
     if ((notes || []).some((note) => !failedIds.has(note.noteId) && !note.markdownPath && !note.unavailableReason && isArchivableLocal(note))) {
       queueAutoArchive("list_notes_recovery");
     }
-    return { ok: true, notes };
+    return {
+      ok: true,
+      notes,
+      cacheRepair: repair ? {
+        rebuilt: Boolean(repair.rebuilt),
+        staleUnclassified: repair.staleUnclassified,
+        missingCover: repair.missingCover,
+        missingNativeFields: repair.missingNativeFields
+      } : null
+    };
+  }
+
+  if (message.type === "repairLocalCache") {
+    const localNotes = await listLocal().catch(() => []);
+    const native = await sendNative({ type: "listNotes" }).catch((error) => ({ ok: false, error: error.message }));
+    if (!native || !native.ok) return { ok: false, error: native && native.error || "native_list_failed" };
+    const repair = await repairLocalCacheFromNative(localNotes, native.notes || [], {
+      force: Boolean(message.force),
+      reason: message.reason || "manual_repair"
+    });
+    return {
+      ok: true,
+      rebuilt: Boolean(repair.rebuilt),
+      total: repair.notes.length,
+      staleUnclassified: repair.staleUnclassified,
+      missingCover: repair.missingCover,
+      missingNativeFields: repair.missingNativeFields
+    };
   }
 
   if (message.type === "archiveNote") {
@@ -120,7 +147,7 @@ async function handleMessage(message, sender) {
     const result = await sendNative({ type: "classifyAll", forceUnclassified: true, prefillOnly: true });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
-      if (native && native.ok) await upsertLocal(native.notes || []);
+      if (native && native.ok) await repairLocalCacheFromNative(await listLocal().catch(() => []), native.notes || [], { reason: "classify_all" });
     }
     await appendEvent(result.ok ? "info" : "error", "classify_all", {
       ok: Boolean(result.ok),
@@ -161,7 +188,7 @@ async function handleMessage(message, sender) {
     });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
-      if (native && native.ok) await upsertLocal(native.notes || []);
+      if (native && native.ok) await repairLocalCacheFromNative(await listLocal().catch(() => []), native.notes || [], { reason: "merge_taxonomy" });
     }
     await appendEvent(result.ok ? "info" : "error", "merge_taxonomy", {
       ok: Boolean(result.ok),
@@ -184,7 +211,7 @@ async function handleMessage(message, sender) {
     const result = await sendNative({ type: "approveTaxonomyPath", key: message.key || "", path: message.path || "" });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
-      if (native && native.ok) await upsertLocal(native.notes || []);
+      if (native && native.ok) await repairLocalCacheFromNative(await listLocal().catch(() => []), native.notes || [], { reason: "approve_taxonomy" });
     }
     await appendEvent(result.ok ? "info" : "error", "approve_taxonomy_path", {
       ok: Boolean(result.ok),
@@ -818,7 +845,7 @@ async function syncLocalNotesToNative() {
     const nativeNotes = native.notes || [];
     const nativeIds = new Set(nativeNotes.map((note) => note.noteId).filter(Boolean));
     const missingInNative = localNotes.filter((note) => note.noteId && !nativeIds.has(note.noteId));
-    if (nativeNotes.length) await upsertLocal(nativeNotes);
+    await repairLocalCacheFromNative(localNotes, nativeNotes, { reason: "sync_native" });
     if (!missingInNative.length) return { ok: true, count: 0, pulled: nativeNotes.length };
     const result = await sendNative({ type: "upsertNotes", notes: missingInNative }).catch((error) => ({ ok: false, error: error.message }));
     return {
@@ -832,6 +859,59 @@ async function syncLocalNotesToNative() {
   return { ok: Boolean(result && result.ok), count: localNotes.length, error: result && result.error || "" };
 }
 
+async function repairLocalCacheFromNative(localNotes, nativeNotes, options = {}) {
+  const mergedNotes = mergeLocalAndNativeNotes(localNotes || [], nativeNotes || []);
+  const stats = localCacheRepairStats(localNotes || [], nativeNotes || []);
+  const rebuilt = Boolean(options.force || stats.needsRepair);
+  if (rebuilt) {
+    await clearLocalNotes();
+    if (mergedNotes.length) await upsertLocal(mergedNotes);
+    await appendEvent("info", "local_cache_repaired", {
+      reason: options.reason || "",
+      total: mergedNotes.length,
+      staleUnclassified: stats.staleUnclassified,
+      missingCover: stats.missingCover,
+      missingNativeFields: stats.missingNativeFields
+    });
+  } else if (mergedNotes.length) {
+    await upsertLocal(mergedNotes);
+  }
+  return {
+    ok: true,
+    rebuilt,
+    notes: mergedNotes,
+    staleUnclassified: stats.staleUnclassified,
+    missingCover: stats.missingCover,
+    missingNativeFields: stats.missingNativeFields
+  };
+}
+
+function localCacheRepairStats(localNotes, nativeNotes) {
+  const nativeById = new Map((nativeNotes || []).filter((note) => note && note.noteId).map((note) => [note.noteId, note]));
+  let staleUnclassified = 0;
+  let missingCover = 0;
+  let missingNativeFields = 0;
+  for (const local of localNotes || []) {
+    if (!local || !local.noteId) continue;
+    const native = nativeById.get(local.noteId);
+    if (!native) continue;
+    if (isUnclassifiedAiLocal(local.ai) && native.ai && !isUnclassifiedAiLocal(native.ai)) staleUnclassified += 1;
+    if (!local.cover && native.cover) missingCover += 1;
+    if ((!local.title && native.title) || (!(local.url || local.link || local.href) && (native.url || native.link || native.href))) {
+      missingNativeFields += 1;
+    }
+  }
+  const localIds = new Set((localNotes || []).map((note) => note && note.noteId).filter(Boolean));
+  const nativeOnly = (nativeNotes || []).filter((note) => note && note.noteId && !localIds.has(note.noteId)).length;
+  return {
+    staleUnclassified,
+    missingCover,
+    missingNativeFields,
+    nativeOnly,
+    needsRepair: staleUnclassified > 0 || missingCover > 0 || missingNativeFields > 0 || (nativeNotes || []).length > 0 && nativeOnly > 0 && !(localNotes || []).length
+  };
+}
+
 function mergeLocalAndNativeNotes(localNotes, nativeNotes) {
   const byId = new Map();
   for (const note of nativeNotes || []) {
@@ -839,7 +919,8 @@ function mergeLocalAndNativeNotes(localNotes, nativeNotes) {
   }
   for (const note of localNotes || []) {
     if (!note || !note.noteId) continue;
-    if (!byId.has(note.noteId)) byId.set(note.noteId, note);
+    const nativeNote = byId.get(note.noteId);
+    byId.set(note.noteId, nativeNote ? mergeNoteLocal(note, nativeNote) : note);
   }
   return Array.from(byId.values()).sort(compareNotesByDiscoveryOrder);
 }

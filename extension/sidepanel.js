@@ -90,9 +90,17 @@ chrome.storage.session.onChanged.addListener((changes) => {
 });
 
 loadTheme();
-refreshBackgroundStatus();
-refresh();
+initialize();
 setInterval(refresh, 10000);
+
+async function initialize() {
+  await refreshBackgroundStatus();
+  const repair = await chrome.runtime.sendMessage({ type: "repairLocalCache", reason: "sidepanel_load" }).catch(() => null);
+  if (repair && repair.ok && repair.rebuilt) {
+    statusEl.textContent = `本地缓存已修复：${repair.total || 0} 条 / 补封面 ${repair.missingCover || 0} / 修正未分类 ${repair.staleUnclassified || 0}`;
+  }
+  await refresh();
+}
 
 async function send(payload) {
   const response = await chrome.runtime.sendMessage(payload).catch((error) => ({ ok: false, error: error.message }));
@@ -172,6 +180,9 @@ async function refresh() {
       return;
     }
     currentNotes = response.notes || [];
+    if (response.cacheRepair && response.cacheRepair.rebuilt) {
+      statusEl.textContent = `本地缓存已同步：补封面 ${response.cacheRepair.missingCover || 0} / 修正未分类 ${response.cacheRepair.staleUnclassified || 0}`;
+    }
     pruneViewCache(currentNotes);
     render(currentNotes);
     refreshReport();

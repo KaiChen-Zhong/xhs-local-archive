@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "XHS Local Archive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Archive, classify, and export accessible Xiaohongshu favorites/likes into local Markdown.",
   "permissions": [
     "storage",

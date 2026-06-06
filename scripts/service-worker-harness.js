@@ -240,6 +240,7 @@ async function main() {
       noteId: "stale-classification-1",
       title: "AI 工具旧快照",
       url: "https://www.xiaohongshu.com/explore/stale-classification-1",
+      cover: "https://img.example/local-cover.jpg",
       markdownPath: "C:\\archive\\stale-classification-1.md",
       ai: { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
     }],
@@ -264,14 +265,51 @@ async function main() {
   assert.equal(merged.ok, true, JSON.stringify(merged));
   assert.equal(merged.notes.length, 1, JSON.stringify(merged));
   assert.equal(merged.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
+  assert.equal(merged.notes[0].cover, "https://img.example/local-cover.jpg");
   const relisted = await staleMergeHarness.sendRuntimeMessage({ type: "listNotes" });
   assert.equal(relisted.ok, true, JSON.stringify(relisted));
   assert.equal(relisted.notes.length, 1, JSON.stringify(relisted));
   assert.equal(relisted.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
+  assert.equal(relisted.notes[0].cover, "https://img.example/local-cover.jpg");
+
+  const staleCacheHarness = createHarness({
+    localNotes: [{
+      noteId: "stale-cache-1",
+      title: "",
+      url: "",
+      cover: "",
+      ai: { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
+    }],
+    nativeHandler(payload) {
+      if (payload.type === "listNotes") {
+        return {
+          ok: true,
+          notes: [{
+            noteId: "stale-cache-1",
+            title: "完整封面分类",
+            url: "https://www.xiaohongshu.com/explore/stale-cache-1",
+            cover: "https://img.example/native-cover.jpg",
+            ai: { categoryPath: ["生活", "日常记录"], category: "生活", subcategory: "日常记录", source: "local_prefill" }
+          }]
+        };
+      }
+      if (payload.type === "logDiagnostic") return { ok: true };
+      return { ok: true };
+    }
+  });
+  const repaired = await staleCacheHarness.sendRuntimeMessage({ type: "repairLocalCache", reason: "test" });
+  assert.equal(repaired.ok, true, JSON.stringify(repaired));
+  assert.equal(repaired.rebuilt, true, JSON.stringify(repaired));
+  assert.equal(repaired.missingCover, 1, JSON.stringify(repaired));
+  assert.equal(repaired.staleUnclassified, 1, JSON.stringify(repaired));
+  const repairedList = await staleCacheHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(repairedList.notes[0].title, "完整封面分类");
+  assert.equal(repairedList.notes[0].cover, "https://img.example/native-cover.jpg");
+  assert.equal(repairedList.notes[0].ai.categoryPath.join("/"), "生活/日常记录");
 
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal", "repairLocalCacheRestoresNativeFields"]
   }, null, 2));
 }
 
