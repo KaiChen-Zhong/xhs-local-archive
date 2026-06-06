@@ -340,9 +340,43 @@ async function main() {
   assert.equal(recoveredList.classificationRecovery.unclassifiedBefore, 1, JSON.stringify(recoveredList));
   assert.equal(recoveredList.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
 
+  const authoritativeHarness = createHarness({
+    localNotes: [{
+      noteId: "local-only-unclassified",
+      title: "旧缓存",
+      ai: { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
+    }],
+    nativeHandler(payload) {
+      if (payload.type === "listNotes") {
+        return {
+          ok: true,
+          notes: [{
+            noteId: "native-authoritative-1",
+            title: "native 正确数据",
+            url: "https://www.xiaohongshu.com/explore/native-authoritative-1",
+            cover: "https://img.example/native-authoritative.jpg",
+            ai: { categoryPath: ["科技", "AI工具"], category: "科技", subcategory: "AI工具", source: "local_prefill" }
+          }]
+        };
+      }
+      if (payload.type === "logDiagnostic") return { ok: true };
+      return { ok: true };
+    }
+  });
+  const authoritativeRepair = await authoritativeHarness.sendRuntimeMessage({
+    type: "repairLocalCache",
+    force: true,
+    nativeAuthoritative: true,
+    reason: "test"
+  });
+  assert.equal(authoritativeRepair.ok, true, JSON.stringify(authoritativeRepair));
+  assert.equal(authoritativeRepair.total, 1, JSON.stringify(authoritativeRepair));
+  const authoritativeList = await authoritativeHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(authoritativeList.notes.map((note) => note.noteId).join(","), "native-authoritative-1");
+
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal", "repairLocalCacheRestoresNativeFields", "nativeUnclassifiedAutoRecovery"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal", "repairLocalCacheRestoresNativeFields", "nativeUnclassifiedAutoRecovery", "nativeAuthoritativeCacheRepair"]
   }, null, 2));
 }
 

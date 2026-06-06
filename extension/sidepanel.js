@@ -97,7 +97,12 @@ setInterval(refresh, 10000);
 
 async function initialize() {
   await refreshBackgroundStatus();
-  const repair = await chrome.runtime.sendMessage({ type: "repairLocalCache", reason: "sidepanel_load" }).catch(() => null);
+  const repair = await chrome.runtime.sendMessage({
+    type: "repairLocalCache",
+    reason: "sidepanel_load",
+    force: true,
+    nativeAuthoritative: true
+  }).catch(() => null);
   const recovered = repair && repair.classificationRecovery && repair.classificationRecovery.recovered;
   if (recovered) {
     statusEl.textContent = `未分类已自动整理：${repair.classificationRecovery.succeeded || 0}/${repair.classificationRecovery.unclassifiedBefore || 0}`;
@@ -186,6 +191,7 @@ async function refresh() {
       return;
     }
     currentNotes = response.notes || [];
+    resetMissingActiveCategory(currentNotes);
     if (response.classificationRecovery && response.classificationRecovery.recovered) {
       statusEl.textContent = `未分类已自动整理：${response.classificationRecovery.succeeded || 0}/${response.classificationRecovery.unclassifiedBefore || 0}`;
     }
@@ -200,6 +206,12 @@ async function refresh() {
   } finally {
     refreshInFlight = false;
   }
+}
+
+function resetMissingActiveCategory(notes) {
+  if (!activeCategoryPath.length) return;
+  const exists = (notes || []).some((note) => pathStartsWith(classificationOf(note).path, activeCategoryPath));
+  if (!exists) activeCategoryPath = [];
 }
 
 async function refreshBackgroundStatus() {

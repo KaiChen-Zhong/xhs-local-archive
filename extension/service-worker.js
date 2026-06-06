@@ -108,6 +108,7 @@ async function handleMessage(message, sender) {
     if (classificationRecovery && classificationRecovery.native) native = classificationRecovery.native;
     const repair = await repairLocalCacheFromNative(localNotes, native.notes || [], {
       force: Boolean(message.force),
+      nativeAuthoritative: Boolean(message.nativeAuthoritative),
       reason: message.reason || "manual_repair"
     });
     return {
@@ -912,14 +913,16 @@ async function recoverNativeUnclassifiedNotes(nativeNotes, reason) {
 
 async function repairLocalCacheFromNative(localNotes, nativeNotes, options = {}) {
   const mergedNotes = mergeLocalAndNativeNotes(localNotes || [], nativeNotes || []);
+  const notesToStore = options.nativeAuthoritative && (nativeNotes || []).length ? (nativeNotes || []).slice().sort(compareNotesByDiscoveryOrder) : mergedNotes;
   const stats = localCacheRepairStats(localNotes || [], nativeNotes || []);
   const rebuilt = Boolean(options.force || stats.needsRepair);
   if (rebuilt) {
     await clearLocalNotes();
-    if (mergedNotes.length) await upsertLocal(mergedNotes);
+    if (notesToStore.length) await upsertLocal(notesToStore);
     await appendEvent("info", "local_cache_repaired", {
       reason: options.reason || "",
-      total: mergedNotes.length,
+      total: notesToStore.length,
+      nativeAuthoritative: Boolean(options.nativeAuthoritative),
       staleUnclassified: stats.staleUnclassified,
       missingCover: stats.missingCover,
       missingNativeFields: stats.missingNativeFields
@@ -930,7 +933,7 @@ async function repairLocalCacheFromNative(localNotes, nativeNotes, options = {})
   return {
     ok: true,
     rebuilt,
-    notes: mergedNotes,
+    notes: rebuilt ? notesToStore : mergedNotes,
     staleUnclassified: stats.staleUnclassified,
     missingCover: stats.missingCover,
     missingNativeFields: stats.missingNativeFields
