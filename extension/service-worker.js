@@ -477,6 +477,10 @@ function mergeAiClassificationLocal(existingAi, incomingAi) {
   if (!incomingAi) return existingAi;
   const existingRank = classificationQualityRankLocal(existingAi);
   const incomingRank = classificationQualityRankLocal(incomingAi);
+  const existingUnclassified = isUnclassifiedAiLocal(existingAi);
+  const incomingUnclassified = isUnclassifiedAiLocal(incomingAi);
+  if (!existingUnclassified && incomingUnclassified) return existingAi;
+  if (existingUnclassified && !incomingUnclassified) return incomingAi;
   if (incomingRank > existingRank) return incomingAi;
   if (incomingRank < existingRank) return existingAi;
   const merged = { ...existingAi, ...incomingAi };
@@ -491,11 +495,21 @@ function classificationQualityRankLocal(ai = {}) {
   const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
   const unclassified = !path.length || path.join("/") === "未分类/待细分";
   const depth = unclassified ? 0 : Math.min(path.length, 5);
+  if (unclassified) return 1;
   if (ai.source === "manual" || ai.source === "merge") return 50 + depth;
   if (!unclassified && /^ai/.test(String(ai.source || ""))) return 40 + depth;
   if (!unclassified) return 30 + depth;
-  if (ai.classificationIncomplete || ai.providerError) return 20;
-  return 10;
+  return 1;
+}
+
+function isUnclassifiedAiLocal(ai = {}) {
+  const path = parsePath(ai && (ai.categoryPath || [ai.category, ai.subcategory]) || []);
+  return !path.length || path.join("/") === "未分类/待细分";
+}
+
+function parsePath(value) {
+  const raw = Array.isArray(value) ? value : String(value || "").split(/[/>｜|,，]/);
+  return raw.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5);
 }
 
 function mergeDiscoveryIndexLocal(existing = {}, incoming = {}) {
@@ -825,7 +839,8 @@ function mergeLocalAndNativeNotes(localNotes, nativeNotes) {
   }
   for (const note of localNotes || []) {
     if (!note || !note.noteId) continue;
-    byId.set(note.noteId, mergeNoteLocal(byId.get(note.noteId) || {}, note));
+    const nativeNote = byId.get(note.noteId);
+    byId.set(note.noteId, nativeNote ? mergeNoteLocal(note, nativeNote) : note);
   }
   return Array.from(byId.values()).sort(compareNotesByDiscoveryOrder);
 }

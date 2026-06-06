@@ -235,9 +235,43 @@ async function main() {
   const listed = await autoArchiveHarness.sendRuntimeMessage({ type: "listNotes" });
   assert.equal(listed.notes[0].markdownPath, "C:\\archive\\auto-archive-1.md");
 
+  const staleMergeHarness = createHarness({
+    localNotes: [{
+      noteId: "stale-classification-1",
+      title: "AI 工具旧快照",
+      url: "https://www.xiaohongshu.com/explore/stale-classification-1",
+      markdownPath: "C:\\archive\\stale-classification-1.md",
+      ai: { categoryPath: ["未分类", "待细分"], category: "未分类", subcategory: "待细分", source: "local" }
+    }],
+    nativeHandler(payload) {
+      if (payload.type === "listNotes") {
+        return {
+          ok: true,
+          notes: [{
+            noteId: "stale-classification-1",
+            title: "AI 工具旧快照",
+            url: "https://www.xiaohongshu.com/explore/stale-classification-1",
+            markdownPath: "C:\\archive\\stale-classification-1.md",
+            ai: { categoryPath: ["科技", "AI工具"], category: "科技", subcategory: "AI工具", source: "local_prefill" }
+          }]
+        };
+      }
+      if (payload.type === "logDiagnostic") return { ok: true };
+      return { ok: true };
+    }
+  });
+  const merged = await staleMergeHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(merged.ok, true, JSON.stringify(merged));
+  assert.equal(merged.notes.length, 1, JSON.stringify(merged));
+  assert.equal(merged.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
+  const relisted = await staleMergeHarness.sendRuntimeMessage({ type: "listNotes" });
+  assert.equal(relisted.ok, true, JSON.stringify(relisted));
+  assert.equal(relisted.notes.length, 1, JSON.stringify(relisted));
+  assert.equal(relisted.notes[0].ai.categoryPath.join("/"), "科技/AI工具");
+
   console.log(JSON.stringify({
     ok: true,
-    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery"]
+    checks: ["captureSeedsKnownLocalNotes", "riskLockFromCapture", "riskLockBlocksCapture", "riskLockExpires", "autoArchiveAfterDiscovery", "nativeClassificationBeatsStaleLocal"]
   }, null, 2));
 }
 

@@ -516,6 +516,7 @@ function buildReport(db) {
   return {
     archiveRoot,
     total: notes.length,
+    classified: notes.filter((note) => classificationOf(note).path.join("/") !== "未分类/待细分").length,
     counts,
     events: (db.events || []).slice(-20)
   };

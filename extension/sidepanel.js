@@ -193,7 +193,8 @@ async function refreshReport() {
   if (!response || !response.ok) return;
   const report = response.report;
   const counts = report.counts || {};
-  reportEl.textContent = `本地 ${report.total || 0} 条 · 已分类 ${classifiedCount(currentNotes)} · 已导出 ${counts.archived || 0}`;
+  const classified = Number.isFinite(report.classified) ? report.classified : classifiedCount(currentNotes);
+  reportEl.textContent = `本地 ${report.total || 0} 条 · 已分类 ${classified} · 已导出 ${counts.archived || 0}`;
   renderEvents([...(report.events || []), ...(report.sessionEvents || [])]);
   renderStaticHealth(report);
 }
