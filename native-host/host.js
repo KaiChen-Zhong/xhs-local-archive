@@ -143,9 +143,11 @@ function classificationWriteLockActive() {
 function acquireClassificationWriteLock() {
   ensureDir(archiveRoot);
   fs.writeFileSync(classificationLockPath, `${process.pid}\n${new Date().toISOString()}\n`, "utf8");
-  return () => {
-    try { fs.unlinkSync(classificationLockPath); } catch {}
-  };
+  return releaseClassificationWriteLock;
+}
+
+function releaseClassificationWriteLock() {
+  try { fs.unlinkSync(classificationLockPath); } catch {}
 }
 
 function logEvent(db, level, message, meta = {}) {
@@ -394,6 +396,14 @@ async function handleMessage(message) {
 
   if (type === "getSettings") {
     return { ok: true, settings: publicSettings(db.settings) };
+  }
+
+  if (type === "releaseClassificationLock") {
+    const existed = classificationWriteLockActive();
+    releaseClassificationWriteLock();
+    logEvent(db, "info", "release_classification_lock", { existed, reason: message.reason || "" });
+    saveDb(db);
+    return { ok: true, released: existed };
   }
 
   if (type === "saveManualXhsValidation") {

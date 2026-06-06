@@ -995,6 +995,15 @@ test("native host reports incomplete AI settings", async () => {
   assert.equal(result.error, "ai_settings_incomplete");
 });
 
+test("native host releases classification write lock", async () => {
+  const lockPath = path.join(process.env.XHS_ARCHIVE_DIR, ".classification.lock");
+  fs.writeFileSync(lockPath, "test-lock\n", "utf8");
+  const result = await handleMessage({ type: "releaseClassificationLock", reason: "test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.released, true);
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
 test("native host deleteLocal removes archived note and markdown", async () => {
   const note = {
     noteId: `delete-${Date.now()}`,

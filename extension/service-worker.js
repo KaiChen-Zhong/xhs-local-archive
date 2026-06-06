@@ -15,13 +15,17 @@ let autoArchiveRunning = false;
 let autoArchiveRequested = false;
 let autoArchiveFailures = [];
 
+recoverNativeState("service_worker_loaded");
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  recoverNativeState("installed_recovery");
   queueAutoArchive("installed_recovery");
 });
 
 if (chrome.runtime.onStartup) {
   chrome.runtime.onStartup.addListener(() => {
+    recoverNativeState("startup_recovery");
     queueAutoArchive("startup_recovery");
   });
 }
@@ -386,6 +390,16 @@ async function injectContentScripts(tabId) {
     target: { tabId },
     files: ["xhs-extractors.js", "content-script.js"]
   });
+}
+
+async function recoverNativeState(reason) {
+  const result = await sendNative({ type: "releaseClassificationLock", reason }).catch((error) => ({ ok: false, error: error.message }));
+  await appendEvent(result.ok ? "info" : "error", "release_classification_lock", {
+    reason,
+    ok: Boolean(result.ok),
+    released: Boolean(result.released),
+    error: result.error || ""
+  }).catch(() => {});
 }
 
 function openDb() {
