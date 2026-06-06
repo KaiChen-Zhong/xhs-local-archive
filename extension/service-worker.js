@@ -465,18 +465,23 @@ function mergeAiClassificationLocal(existingAi, incomingAi) {
   const incomingRank = classificationQualityRankLocal(incomingAi);
   if (incomingRank > existingRank) return incomingAi;
   if (incomingRank < existingRank) return existingAi;
-  return { ...existingAi, ...incomingAi };
+  const merged = { ...existingAi, ...incomingAi };
+  if (!incomingAi.aiPipeline && existingAi.aiPipeline) merged.aiPipeline = existingAi.aiPipeline;
+  if (!incomingAi.providerError && existingAi.providerError) merged.providerError = existingAi.providerError;
+  if (!incomingAi.classificationIncomplete && existingAi.classificationIncomplete) merged.classificationIncomplete = existingAi.classificationIncomplete;
+  return merged;
 }
 
 function classificationQualityRankLocal(ai = {}) {
   if (!ai || !Object.keys(ai).length) return 0;
   const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
   const unclassified = !path.length || path.join("/") === "未分类/待细分";
-  if (ai.source === "manual" || ai.source === "merge") return 5;
-  if (!unclassified && ai.source === "ai") return 4;
-  if (!unclassified) return 3;
-  if (ai.classificationIncomplete || ai.providerError) return 2;
-  return 1;
+  const depth = unclassified ? 0 : Math.min(path.length, 5);
+  if (ai.source === "manual" || ai.source === "merge") return 50 + depth;
+  if (!unclassified && /^ai/.test(String(ai.source || ""))) return 40 + depth;
+  if (!unclassified) return 30 + depth;
+  if (ai.classificationIncomplete || ai.providerError) return 20;
+  return 10;
 }
 
 function mergeDiscoveryIndexLocal(existing = {}, incoming = {}) {

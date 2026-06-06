@@ -524,7 +524,12 @@ function needsAiClassification(note) {
   if (ai.providerError) return true;
   if (ai.source === "manual" || ai.source === "merge") return false;
   const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
-  return !path.length || path.join("/") === "未分类/待细分";
+  return !path.length || path.join("/") === "未分类/待细分" || isCoarseClassificationPath(path);
+}
+
+function isCoarseClassificationPath(path) {
+  if (path.length <= 1) return true;
+  return path.length === 2 && /^(待细分|其他|其它|未分类|综合)$/.test(path[1]);
 }
 
 function classificationLabel(note, classification) {

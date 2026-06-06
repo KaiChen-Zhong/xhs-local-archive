@@ -20,6 +20,7 @@ const {
 const archiveRoot = process.env.XHS_ARCHIVE_DIR || path.join(os.homedir(), "XHS-Archive");
 const dbPath = path.join(archiveRoot, "database.json");
 const portableKeyPath = path.join(archiveRoot, ".secret-key");
+const classificationLockPath = path.join(archiveRoot, ".classification.lock");
 const MEDIA_DOWNLOAD_TIMEOUT_MS = parseEnvInt("XHS_MEDIA_DOWNLOAD_TIMEOUT_MS", 30000);
 const MEDIA_DOWNLOAD_DELAY_MS = parseEnvInt("XHS_MEDIA_DOWNLOAD_DELAY_MS", 800);
 const MEDIA_MAX_IMAGE_BYTES = parseEnvInt("XHS_MEDIA_MAX_IMAGE_BYTES", 50 * 1024 * 1024);
@@ -29,6 +30,7 @@ const CLASSIFY_ALL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_LIMIT", 0);
 const CLASSIFY_ALL_DELAY_MS = parseEnvInt("XHS_CLASSIFY_ALL_DELAY_MS", 500);
 const CLASSIFY_ALL_CONCURRENCY = parseEnvInt("XHS_CLASSIFY_ALL_CONCURRENCY", 5);
 const CLASSIFY_ALL_RESULT_DETAIL_LIMIT = parseEnvInt("XHS_CLASSIFY_ALL_RESULT_DETAIL_LIMIT", 500);
+const CLASSIFY_BATCH_SIZE = parseEnvInt("XHS_CLASSIFY_BATCH_SIZE", 12);
 const AI_REQUEST_MIN_INTERVAL_MS = parseEnvInt("XHS_AI_REQUEST_MIN_INTERVAL_MS", 250);
 const AI_MAX_RETRIES = parseEnvInt("XHS_AI_MAX_RETRIES", 3);
 const AI_RETRY_BASE_MS = parseEnvInt("XHS_AI_RETRY_BASE_MS", 2000);
@@ -129,6 +131,23 @@ function saveDb(db) {
   writeJson(dbPath, db);
 }
 
+function classificationWriteLockActive() {
+  try {
+    const stat = fs.statSync(classificationLockPath);
+    if (Date.now() - stat.mtimeMs < 6 * 60 * 60 * 1000) return true;
+    fs.unlinkSync(classificationLockPath);
+  } catch {}
+  return false;
+}
+
+function acquireClassificationWriteLock() {
+  ensureDir(archiveRoot);
+  fs.writeFileSync(classificationLockPath, `${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+  return () => {
+    try { fs.unlinkSync(classificationLockPath); } catch {}
+  };
+}
+
 function logEvent(db, level, message, meta = {}) {
   db.events.push({
     ts: new Date().toISOString(),
@@ -150,6 +169,9 @@ async function handleMessage(message) {
   const db = loadDb();
 
   if (type === "upsertNotes") {
+    if (classificationWriteLockActive()) {
+      return { ok: true, upserted: [], deferred: true, reason: "classification_active" };
+    }
     const notes = Array.isArray(message.notes) ? message.notes : [];
     const upserted = [];
     for (const note of notes) {
@@ -228,6 +250,9 @@ async function handleMessage(message) {
     if (message.requireAi && !hasConfiguredAi(db.settings)) {
       return { ok: false, error: "ai_settings_incomplete" };
     }
+    const releaseClassificationLock = acquireClassificationWriteLock();
+    await sleep(1500);
+    try {
     const limit = classifyAllLimit(message.limit);
     const concurrency = Math.max(1, Math.min(Number(message.concurrency) || CLASSIFY_ALL_CONCURRENCY || 1, 8));
     const candidates = Object.values(db.notes || {})
@@ -236,6 +261,9 @@ async function handleMessage(message) {
       .sort(compareNotesByDiscoveryOrder);
     const notes = Number.isFinite(limit) ? candidates.slice(0, limit) : candidates;
     const detailLimit = Math.max(0, CLASSIFY_ALL_RESULT_DETAIL_LIMIT);
+    if (hasConfiguredAi(db.settings) && message.batch !== false) {
+      return await classifyAllBatch(db, notes, candidates, { detailLimit, batchSize: message.batchSize, limited: Number.isFinite(limit) });
+    }
     const results = new Array(Math.min(notes.length, detailLimit));
     let succeeded = 0;
     let failed = 0;
@@ -281,6 +309,9 @@ async function handleMessage(message) {
       truncatedResults: notes.length > results.length,
       results: results.filter(Boolean)
     };
+    } finally {
+      if (!message.holdLock) releaseClassificationLock();
+    }
   }
 
   if (type === "updateClassification") {
@@ -886,7 +917,8 @@ function needsClassification(note) {
   if (ai.taxonomyPending) return false;
   const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
   if (!path.length) return true;
-  return pathKey(path) === "未分类/待细分";
+  if (pathKey(path) === "未分类/待细分") return true;
+  return isCoarseClassificationPath(path);
 }
 
 function isUnclassifiedPath(note) {
@@ -917,18 +949,23 @@ function mergeAiClassification(existingAi, incomingAi) {
   const incomingRank = classificationQualityRank(incomingAi);
   if (incomingRank > existingRank) return incomingAi;
   if (incomingRank < existingRank) return existingAi;
-  return { ...existingAi, ...incomingAi };
+  const merged = { ...existingAi, ...incomingAi };
+  if (!incomingAi.aiPipeline && existingAi.aiPipeline) merged.aiPipeline = existingAi.aiPipeline;
+  if (!incomingAi.providerError && existingAi.providerError) merged.providerError = existingAi.providerError;
+  if (!incomingAi.classificationIncomplete && existingAi.classificationIncomplete) merged.classificationIncomplete = existingAi.classificationIncomplete;
+  return merged;
 }
 
 function classificationQualityRank(ai = {}) {
   if (!ai || !Object.keys(ai).length) return 0;
   const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
   const unclassified = !path.length || pathKey(path) === "未分类/待细分";
-  if (ai.source === "manual" || ai.source === "merge") return 5;
-  if (!unclassified && ai.source === "ai") return 4;
-  if (!unclassified) return 3;
-  if (ai.classificationIncomplete || ai.providerError) return 2;
-  return 1;
+  const depth = unclassified ? 0 : Math.min(path.length, 5);
+  if (ai.source === "manual" || ai.source === "merge") return 50 + depth;
+  if (!unclassified && /^ai/.test(String(ai.source || ""))) return 40 + depth;
+  if (!unclassified) return 30 + depth;
+  if (ai.classificationIncomplete || ai.providerError) return 20;
+  return 10;
 }
 
 function hasConfiguredAi(settings = {}) {
@@ -1079,9 +1116,14 @@ function canonicalizeCategoryPath(db, path) {
 
 function governClassification(db, classification, options = {}) {
   const normalized = normalizeClassification(classification || {});
-  if (pathKey(normalized.categoryPath) === "未分类/待细分" && options.noteId && db.notes && db.notes[options.noteId]) {
+  if (options.noteId && db.notes && db.notes[options.noteId]) {
     const inferred = inferTaxonomy(db.notes[options.noteId]).path;
-    if (pathKey(inferred) !== "未分类/待细分") {
+    const normalizedKey = pathKey(normalized.categoryPath);
+    if (
+      pathKey(inferred) !== "未分类/待细分" &&
+      (normalizedKey === "未分类/待细分" ||
+        (isCoarseClassificationPath(normalized.categoryPath) && pathStartsWithPath(inferred, normalized.categoryPath.slice(0, 1))))
+    ) {
       normalized.path = inferred;
       normalized.categoryPath = inferred;
       normalized.category = inferred[0] || "未分类";
@@ -1096,7 +1138,12 @@ function governClassification(db, classification, options = {}) {
   let proposedPath = resolved.proposedPath || [];
   const explicitProposal = normalizeCategoryPath(classification && classification.proposedCategoryPath || []);
   const normalizedProposal = normalizeSynonymPath(explicitProposal);
-  if (normalizedProposal.length && pathKey(normalizedProposal) !== pathKey(canonicalPath)) {
+  if (
+    normalizedProposal.length &&
+    pathKey(normalizedProposal) !== "未分类/待细分" &&
+    !(isCoarseClassificationPath(normalizedProposal) && pathStartsWithPath(canonicalPath, normalizedProposal)) &&
+    pathKey(normalizedProposal) !== pathKey(canonicalPath)
+  ) {
     const approvedProposal = findApprovedPathByAlias(db, explicitProposal) ||
       findApprovedPathByAlias(db, normalizedProposal) ||
       (findNodeByPath(db, normalizedProposal) && findNodeByPath(db, normalizedProposal).path);
@@ -1116,6 +1163,19 @@ function governClassification(db, classification, options = {}) {
       proposedPath = normalizedProposal;
     }
   }
+  if (options.noteId && db.notes && db.notes[options.noteId] && isCoarseClassificationPath(canonicalPath)) {
+    const inferred = inferTaxonomy(db.notes[options.noteId]).path;
+    if (
+      pathKey(inferred) !== "未分类/待细分" &&
+      pathStartsWithPath(inferred, canonicalPath.slice(0, 1)) &&
+      findNodeByPath(db, inferred)
+    ) {
+      canonicalPath = inferred.slice();
+      pending = null;
+      pendingKey = "";
+      proposedPath = [];
+    }
+  }
   const canonicalNode = findNodeByPath(db, canonicalPath) || resolved.node;
   return {
     ...(classification || {}),
@@ -1131,6 +1191,12 @@ function governClassification(db, classification, options = {}) {
     proposedCategoryPath: proposedPath,
     source
   };
+}
+
+function isCoarseClassificationPath(path) {
+  const normalized = normalizeCategoryPath(path);
+  if (normalized.length <= 1) return true;
+  return normalized.length === 2 && /^(待细分|其他|其它|未分类|综合)$/.test(normalized[1]);
 }
 
 function mergeTaxonomyPath(db, fromPath, toPath) {
@@ -1513,6 +1579,142 @@ async function buildAi(note, settings = {}, taxonomy = null) {
       providerError: error.message
     };
   }
+}
+
+async function classifyAllBatch(db, notes, candidates, options = {}) {
+  const detailLimit = Math.max(0, Number(options.detailLimit) || 0);
+  const batchSize = Math.max(1, Math.min(Number(options.batchSize) || CLASSIFY_BATCH_SIZE || 12, 30));
+  const ai = batchAiSettings(db.settings);
+  const results = new Array(Math.min(notes.length, detailLimit));
+  let succeeded = 0;
+  let failed = 0;
+  for (let start = 0; start < notes.length; start += batchSize) {
+    const chunk = notes.slice(start, start + batchSize);
+    try {
+      const batch = await callBatchAiCompatible(chunk, ai, db.taxonomy);
+      const byId = new Map(batch.items.map((item) => [String(item.noteId || ""), item]));
+      for (let offset = 0; offset < chunk.length; offset += 1) {
+        const index = start + offset;
+        const note = chunk[offset];
+        const item = byId.get(String(note.noteId)) || {};
+        let governed = governClassification(db, classificationFromParsed(item, note), { source: item.source || "ai_batch", noteId: note.noteId });
+        if (pathKey(governed.categoryPath) === "未分类/待细分") {
+          governed = governClassification(db, finalFallbackClassification(note, "ai_batch_unresolved"), { source: "ai_batch_fallback", noteId: note.noteId });
+        }
+        note.ai = { ...(note.ai || {}), ...governed, aiPipeline: { mode: "batch", model: ai.model, batchSize: chunk.length } };
+        clearClassificationIncomplete(note);
+        note.updatedAt = new Date().toISOString();
+        db.notes[note.noteId] = note;
+        if (isUnclassifiedPath(note)) {
+          failed += 1;
+          markClassificationIncomplete(note);
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: false, error: "classification_still_unclassified", categoryPath: governed.categoryPath };
+        } else {
+          succeeded += 1;
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath };
+        }
+      }
+    } catch (error) {
+      for (let offset = 0; offset < chunk.length; offset += 1) {
+        const index = start + offset;
+        const note = chunk[offset];
+        const governed = governClassification(db, finalFallbackClassification(note, error.message), { source: "ai_batch_fallback", noteId: note.noteId });
+        note.ai = { ...(note.ai || {}), ...governed, providerError: error.message, aiPipeline: { mode: "batch_fallback", model: ai.model, batchSize: chunk.length } };
+        note.updatedAt = new Date().toISOString();
+        db.notes[note.noteId] = note;
+        if (isUnclassifiedPath(note)) {
+          failed += 1;
+          markClassificationIncomplete(note);
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: false, error: error.message };
+        } else {
+          succeeded += 1;
+          if (index < detailLimit) results[index] = { noteId: note.noteId, ok: true, category: governed.category, subcategory: governed.subcategory, categoryPath: governed.categoryPath, fallback: true };
+        }
+      }
+    }
+    saveDb(db);
+  }
+  logEvent(db, "info", "classify_all_batch", { count: notes.length, ok: succeeded, failed, batchSize, model: ai.model });
+  saveDb(db);
+  return {
+    ok: true,
+    mode: "batch",
+    processed: notes.length,
+    succeeded,
+    failed,
+    totalCandidates: candidates.length,
+    limited: Boolean(options.limited),
+    truncatedResults: notes.length > results.length,
+    results: results.filter(Boolean)
+  };
+}
+
+function finalFallbackClassification(note, reason = "") {
+  const inferred = inferTaxonomy(note).path;
+  const path = pathKey(inferred) === "未分类/待细分" ? ["生活", "日常记录"] : inferred;
+  return {
+    categoryPath: path,
+    category: path[0],
+    subcategory: path[1] || "",
+    tags: path.slice(),
+    summary: `AI 批量分类低置信兜底：${note.title || note.noteId || ""}`,
+    highlights: reason ? `兜底原因：${reason}` : "标题和封面信息不足，落入受控兜底分类。",
+    filename: summarizeForFilename(note),
+    source: "ai_batch_fallback",
+    confidence: "low"
+  };
+}
+
+function batchAiSettings(settings = {}) {
+  const errors = [];
+  const textAi = readRuntimeAiSettings(settings, "text", errors);
+  const visionAi = readRuntimeAiSettings(settings, "vision", errors);
+  if (isAiConfigured(visionAi)) return { ...visionAi, role: "vision_batch" };
+  if (isAiConfigured(textAi)) return { ...textAi, role: "text_batch" };
+  throw new Error("ai_settings_incomplete");
+}
+
+async function callBatchAiCompatible(notes, ai, taxonomy = null) {
+  const endpoint = `${String(ai.baseUrl).replace(/\/+$/, "")}/chat/completions`;
+  const prompt = buildBatchAiPrompt(notes, taxonomy);
+  const content = batchUserContent(notes, prompt, ai.role === "vision_batch");
+  const response = await fetchAiChatCompletion(endpoint, ai, content);
+  if (!response.ok) throw new Error(`ai_http_${response.status}`);
+  const payload = await response.json();
+  const raw = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
+  if (!raw) throw new Error("ai_empty_content");
+  const parsed = JSON.parse(raw);
+  const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed.items) ? parsed.items : [];
+  if (!items.length) throw new Error("ai_empty_batch_items");
+  return { items };
+}
+
+function batchUserContent(notes, prompt, includeImages) {
+  if (!includeImages) return prompt;
+  const content = [{ type: "text", text: prompt }];
+  for (const note of notes) {
+    content.push({ type: "text", text: `noteId=${note.noteId}\ntitle=${note.title || ""}\ncover=${note.cover || ""}` });
+    const cover = note.cover || (note.images || [])[0] || "";
+    if (/^https?:\/\//.test(cover)) content.push({ type: "image_url", image_url: { url: cover } });
+  }
+  return content;
+}
+
+function buildBatchAiPrompt(notes, taxonomy = null) {
+  const compactNotes = notes.map((note) => ({
+    noteId: note.noteId,
+    title: note.title || "",
+    author: note.author || "",
+    cover: note.cover || (note.images || [])[0] || "",
+    source_url: note.url || ""
+  }));
+  return buildAiPrompt({ title: "批量分类任务", author: "", cover: "", url: "" }, taxonomy, [
+    "你是小红书收藏批量分类助手。只根据每条 note 的标题、作者和封面进行分类；不要读取或推断正文、评论、隐藏内容。",
+    "对 notes 数组中的每一条都必须返回一个结果，noteId 必须原样返回。",
+    "返回严格 JSON 对象：{ items: [{ noteId, categoryPath, proposedCategoryPath, tags, summary, highlights, confidence, evidence, filename }] }。",
+    "categoryPath 必须是最终可浏览路径；尽量落入已有受控 taxonomy，不能判断到细类时至少选择最接近的大类或父路径。",
+    JSON.stringify({ notes: compactNotes })
+  ]);
 }
 
 async function testAiProvider(settings = {}) {
