@@ -113,7 +113,7 @@ async function handleMessage(message, sender) {
   if (message.type === "classifyAll") {
     const localBeforeClassify = await listLocal().catch(() => []);
     if (localBeforeClassify.length) await sendNative({ type: "upsertNotes", notes: localBeforeClassify }).catch(() => null);
-    const result = await sendNative({ type: "classifyAll", forceUnclassified: true });
+    const result = await sendNative({ type: "classifyAll", forceUnclassified: true, requireAi: true });
     if (result.ok) {
       const native = await sendNative({ type: "listNotes" }).catch(() => null);
       if (native && native.ok) await upsertLocal(native.notes || []);
@@ -448,12 +448,35 @@ function mergeNoteLocal(existing, incoming) {
     xsecToken,
     discoveryIndex,
     source: incoming.source || existing.source || "unknown",
+    ai: mergeAiClassificationLocal(existing.ai, incoming.ai),
     images: unique([...(existing.images || []), ...(incoming.images || [])]),
     videos: unique([...(existing.videos || []), ...(incoming.videos || [])]),
     statuses: { ...(existing.statuses || {}), ...(incoming.statuses || {}) },
     createdAt: existing.createdAt || incoming.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+}
+
+function mergeAiClassificationLocal(existingAi, incomingAi) {
+  if (!existingAi && !incomingAi) return undefined;
+  if (!existingAi) return incomingAi;
+  if (!incomingAi) return existingAi;
+  const existingRank = classificationQualityRankLocal(existingAi);
+  const incomingRank = classificationQualityRankLocal(incomingAi);
+  if (incomingRank > existingRank) return incomingAi;
+  if (incomingRank < existingRank) return existingAi;
+  return { ...existingAi, ...incomingAi };
+}
+
+function classificationQualityRankLocal(ai = {}) {
+  if (!ai || !Object.keys(ai).length) return 0;
+  const path = parsePath(ai.categoryPath || [ai.category, ai.subcategory]);
+  const unclassified = !path.length || path.join("/") === "未分类/待细分";
+  if (ai.source === "manual" || ai.source === "merge") return 5;
+  if (!unclassified && ai.source === "ai") return 4;
+  if (!unclassified) return 3;
+  if (ai.classificationIncomplete || ai.providerError) return 2;
+  return 1;
 }
 
 function mergeDiscoveryIndexLocal(existing = {}, incoming = {}) {

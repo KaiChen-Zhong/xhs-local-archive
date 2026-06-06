@@ -133,6 +133,42 @@ test("native host upserts and lists notes", async () => {
   assert.ok(list.notes.some((item) => item.noteId === note.noteId));
 });
 
+test("native host upsert does not replace valid AI classification with stale unclassified local copy", async () => {
+  const noteId = `preserve-ai-${Date.now()}`;
+  assert.equal((await handleMessage({
+    type: "upsertNotes",
+    notes: [{
+      noteId,
+      title: "AI 工具合集",
+      url: `https://www.xiaohongshu.com/explore/${noteId}`,
+      ai: {
+        categoryPath: ["科技", "AI工具"],
+        category: "科技",
+        subcategory: "AI工具",
+        source: "ai"
+      }
+    }]
+  })).ok, true);
+  assert.equal((await handleMessage({
+    type: "upsertNotes",
+    notes: [{
+      noteId,
+      title: "AI 工具合集",
+      url: `https://www.xiaohongshu.com/explore/${noteId}`,
+      ai: {
+        categoryPath: ["未分类", "待细分"],
+        category: "未分类",
+        subcategory: "待细分",
+        source: "local"
+      }
+    }]
+  })).ok, true);
+  const list = await handleMessage({ type: "listNotes" });
+  const updated = list.notes.find((item) => item.noteId === noteId);
+  assert.equal(updated.ai.categoryPath.join("/"), "科技/AI工具");
+  await handleMessage({ type: "deleteLocal", noteIds: [noteId] });
+});
+
 test("native host lists visual waterfall order before provisional network order", async () => {
   const prefix = `visual-order-${Date.now()}`;
   const notes = [
@@ -629,6 +665,22 @@ test("native host classifyAll advances past already classified notes", async () 
   const classified = await handleMessage({ type: "classifyAll", limit: 2, concurrency: 2 });
   assert.equal(classified.ok, true);
   assert.deepEqual(classified.results.map((item) => item.noteId), [notes[1].noteId, notes[2].noteId]);
+});
+
+test("native host classifyAll can require configured AI instead of silent local fallback", async () => {
+  await handleMessage({ type: "saveSettings", settings: { ai: {} }, clearAiKey: true });
+  const existing = await handleMessage({ type: "listNotes" });
+  await handleMessage({ type: "deleteLocal", noteIds: existing.notes.map((note) => note.noteId) });
+  const note = {
+    noteId: `require-ai-${Date.now()}`,
+    title: "咖啡甜品合集",
+    cover: "https://img.example/coffee.jpg",
+    url: "https://www.xiaohongshu.com/explore/require-ai"
+  };
+  assert.equal((await handleMessage({ type: "upsertNotes", notes: [note] })).ok, true);
+  const classified = await handleMessage({ type: "classifyAll", requireAi: true });
+  assert.equal(classified.ok, false);
+  assert.equal(classified.error, "ai_settings_incomplete");
 });
 
 test("native host classifyAll without limit processes every pending captured note", async () => {

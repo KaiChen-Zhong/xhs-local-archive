@@ -13,6 +13,7 @@ const fields = {
   }
 };
 const resultEl = document.getElementById("result");
+const statusEl = document.getElementById("status");
 
 loadSettings();
 
@@ -23,13 +24,13 @@ document.getElementById("save").addEventListener("click", async () => {
       ai: readFormAiSettings()
     }
   }).catch((error) => ({ ok: false, error: error.message }));
-  resultEl.textContent = JSON.stringify(result, null, 2);
+  showResult("保存 AI 设置", result);
   await loadSettings();
 });
 
 document.getElementById("ping").addEventListener("click", async () => {
   const result = await chrome.runtime.sendMessage({ type: "pingHost" }).catch((error) => ({ ok: false, error: error.message }));
-  resultEl.textContent = JSON.stringify(result, null, 2);
+  showResult("检查本地宿主", result);
 });
 
 document.getElementById("testAi").addEventListener("click", async () => {
@@ -40,7 +41,7 @@ document.getElementById("testAi").addEventListener("click", async () => {
     }
   }).catch(() => null);
   const result = await chrome.runtime.sendMessage({ type: "testAiProvider" }).catch((error) => ({ ok: false, error: error.message }));
-  resultEl.textContent = JSON.stringify(result, null, 2);
+  showResult("测试 AI", result);
   await loadSettings();
 });
 
@@ -63,7 +64,7 @@ document.getElementById("clearAiKey").addEventListener("click", async () => {
   }).catch((error) => ({ ok: false, error: error.message }));
   fields.text.apiKey.value = "";
   fields.vision.apiKey.value = "";
-  resultEl.textContent = JSON.stringify(result, null, 2);
+  showResult("清除 API Key", result);
   await loadSettings();
 });
 
@@ -89,6 +90,7 @@ async function loadSettings() {
   const vision = ai.vision || {};
   fillSlot("text", text);
   fillSlot("vision", vision);
+  renderStatus(result);
 }
 
 function fillSlot(role, slot) {
@@ -96,4 +98,46 @@ function fillSlot(role, slot) {
   fields[role].model.value = slot.model || "";
   fields[role].apiKey.value = "";
   fields[role].apiKey.placeholder = slot.apiKeyConfigured ? "已安全配置；留空保持不变" : "sk-...";
+}
+
+function renderStatus(result) {
+  if (!result || !result.ok) {
+    statusEl.textContent = `设置状态：读取失败，${result && result.error || "unknown"}`;
+    return;
+  }
+  const ai = result.settings && result.settings.ai || {};
+  const text = ai.text || {};
+  const vision = ai.vision || {};
+  const textReady = Boolean(text.baseUrl && text.model && text.apiKeyConfigured);
+  const visionReady = Boolean(vision.baseUrl && vision.model && vision.apiKeyConfigured);
+  if (textReady && visionReady) {
+    statusEl.textContent = "设置状态：文本 AI 和多模态 AI 已配置。";
+  } else if (textReady) {
+    statusEl.textContent = "设置状态：文本 AI 已配置，多模态 AI 未完整配置。";
+  } else if (visionReady) {
+    statusEl.textContent = "设置状态：多模态 AI 已配置，文本 AI 未完整配置。";
+  } else {
+    statusEl.textContent = "设置状态：AI 未完整配置，批量分类不会调用外部 AI。";
+  }
+}
+
+function showResult(action, result) {
+  const ok = result && result.ok;
+  const error = result && (result.error || result.reason);
+  if (ok) {
+    statusEl.textContent = `${action}：完成。`;
+  } else if (error === "ai_settings_incomplete") {
+    statusEl.textContent = `${action}：AI 设置不完整，请检查 Base URL、Model、API Key 是否都已填写并保存。`;
+  } else {
+    statusEl.textContent = `${action}：失败，${error || "unknown"}`;
+  }
+  resultEl.textContent = JSON.stringify(redactResult(result), null, 2);
+}
+
+function redactResult(value) {
+  if (!value || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value, (key, item) => {
+    if (/apiKey|authorization|token|secret/i.test(key)) return item ? "[redacted]" : item;
+    return item;
+  }));
 }

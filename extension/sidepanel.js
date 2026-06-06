@@ -107,6 +107,7 @@ function describeError(response) {
     const seconds = Math.ceil(Number(response.remainingMs || 0) / 1000);
     return `${error}${response.reason ? ` / ${response.reason}` : ""}${seconds ? ` / 剩余 ${seconds}s` : ""}`;
   }
+  if (error === "ai_settings_incomplete") return "AI 设置不完整：请在设置页保存并测试 Mimo 的 Base URL、Model、API Key";
   return error;
 }
 

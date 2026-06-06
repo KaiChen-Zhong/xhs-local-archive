@@ -153,7 +153,9 @@ async function handleMessage(message) {
     const notes = Array.isArray(message.notes) ? message.notes : [];
     const upserted = [];
     for (const note of notes) {
-      const merged = mergeNote(db.notes[note.noteId], note);
+      const existing = db.notes[note.noteId];
+      const merged = mergeNote(existing, note);
+      merged.ai = mergeAiClassification(existing && existing.ai, note && note.ai);
       merged.status = noteCompleteness(merged);
       db.notes[merged.noteId] = merged;
       upserted.push(merged.noteId);
@@ -223,6 +225,9 @@ async function handleMessage(message) {
   }
 
   if (type === "classifyAll") {
+    if (message.requireAi && !hasConfiguredAi(db.settings)) {
+      return { ok: false, error: "ai_settings_incomplete" };
+    }
     const limit = classifyAllLimit(message.limit);
     const concurrency = Math.max(1, Math.min(Number(message.concurrency) || CLASSIFY_ALL_CONCURRENCY || 1, 8));
     const candidates = Object.values(db.notes || {})
@@ -902,6 +907,35 @@ function clearClassificationIncomplete(note) {
   if (!note || !note.ai) return;
   delete note.ai.classificationIncomplete;
   if (note.ai.providerError === "classification_still_unclassified") delete note.ai.providerError;
+}
+
+function mergeAiClassification(existingAi, incomingAi) {
+  if (!existingAi && !incomingAi) return undefined;
+  if (!existingAi) return incomingAi;
+  if (!incomingAi) return existingAi;
+  const existingRank = classificationQualityRank(existingAi);
+  const incomingRank = classificationQualityRank(incomingAi);
+  if (incomingRank > existingRank) return incomingAi;
+  if (incomingRank < existingRank) return existingAi;
+  return { ...existingAi, ...incomingAi };
+}
+
+function classificationQualityRank(ai = {}) {
+  if (!ai || !Object.keys(ai).length) return 0;
+  const path = normalizeCategoryPath(ai.categoryPath || [ai.category, ai.subcategory]);
+  const unclassified = !path.length || pathKey(path) === "未分类/待细分";
+  if (ai.source === "manual" || ai.source === "merge") return 5;
+  if (!unclassified && ai.source === "ai") return 4;
+  if (!unclassified) return 3;
+  if (ai.classificationIncomplete || ai.providerError) return 2;
+  return 1;
+}
+
+function hasConfiguredAi(settings = {}) {
+  const errors = [];
+  const textAi = readRuntimeAiSettings(settings, "text", errors);
+  const visionAi = readRuntimeAiSettings(settings, "vision", errors);
+  return isAiConfigured(textAi) || isAiConfigured(visionAi);
 }
 
 function normalizeClassification(value = {}, fallback = { path: ["未分类", "待细分"] }) {
