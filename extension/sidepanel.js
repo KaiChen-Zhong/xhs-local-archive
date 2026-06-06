@@ -26,8 +26,10 @@ let activeCategoryPath = [];
 let renderLimit = 160;
 let refreshInFlight = false;
 const viewCache = new Map();
+const localCoverCache = new Map();
 const INITIAL_RENDER_LIMIT = 160;
 const RENDER_INCREMENT = 160;
+const LOCAL_COVER_CACHE_LIMIT = 320;
 
 document.getElementById("captureNow").addEventListener("click", () => send({ type: "captureNow" }));
 document.getElementById("startScan").addEventListener("click", () => send({
@@ -254,7 +256,7 @@ function renderStaticHealth(report = {}) {
     return;
   }
   const missingTitle = currentNotes.filter((note) => !note.title).length;
-  const missingCover = currentNotes.filter((note) => !note.cover).length;
+  const missingCover = currentNotes.filter((note) => !hasAnyCover(note)).length;
   const missingUrl = currentNotes.filter((note) => !note.url).length;
   const archived = report.counts && report.counts.archived || currentNotes.filter((note) => note.markdownPath).length;
   captureHealthEl.textContent = `采集健康：本地 ${currentNotes.length} · 已归档 ${archived} · 缺字段 标题${missingTitle}/封面${missingCover}/链接${missingUrl}`;
@@ -365,8 +367,7 @@ function render(notes, options = {}) {
 function renderNoteCard(note) {
   const node = template.content.firstElementChild.cloneNode(true);
   const img = node.querySelector(".cover");
-  img.src = note.cover || "";
-  img.hidden = !note.cover;
+  setupCoverImage(img, note);
   const coverLink = node.querySelector(".coverLink");
   coverLink.disabled = !note.url;
   coverLink.title = note.url ? "在小红书中打开" : "缺少可用链接";
@@ -397,6 +398,68 @@ function renderNoteCard(note) {
   archiveButton.addEventListener("click", () => send({ type: "archiveNote", noteId: note.noteId }));
   node.querySelector(".deleteOne").addEventListener("click", () => deleteNotes([note.noteId]));
   return node;
+}
+
+function setupCoverImage(img, note) {
+  const localCover = firstLocalImage(note);
+  const remoteCover = note.cover || "";
+  img.alt = note.title || "";
+  img.loading = "lazy";
+  img.hidden = !(localCover || remoteCover);
+  img.onerror = () => {
+    if (localCover && img.dataset.localCover !== localCover) {
+      loadLocalCover(img, localCover, remoteCover);
+      return;
+    }
+    img.hidden = true;
+  };
+  if (localCover) {
+    loadLocalCover(img, localCover, remoteCover);
+    return;
+  }
+  img.src = remoteCover;
+}
+
+function firstLocalImage(note) {
+  const images = Array.isArray(note.localImages) ? note.localImages : [];
+  return images.find((item) => typeof item === "string" && item.trim()) || "";
+}
+
+function hasAnyCover(note) {
+  return Boolean(note && (note.cover || firstLocalImage(note)));
+}
+
+async function loadLocalCover(img, file, remoteFallback) {
+  img.dataset.localCover = file;
+  const cached = localCoverCache.get(file);
+  if (cached) {
+    img.src = cached;
+    img.hidden = false;
+    return;
+  }
+  const result = await chrome.runtime.sendMessage({ type: "readLocalMedia", file }).catch((error) => ({ ok: false, error: error.message }));
+  if (img.dataset.localCover !== file) return;
+  if (result && result.ok && result.dataUrl) {
+    rememberLocalCover(file, result.dataUrl);
+    img.src = result.dataUrl;
+    img.hidden = false;
+    return;
+  }
+  img.dataset.localCover = "";
+  if (remoteFallback) {
+    img.src = remoteFallback;
+    img.hidden = false;
+  } else {
+    img.hidden = true;
+  }
+}
+
+function rememberLocalCover(file, dataUrl) {
+  if (localCoverCache.size >= LOCAL_COVER_CACHE_LIMIT) {
+    const firstKey = localCoverCache.keys().next().value;
+    if (firstKey) localCoverCache.delete(firstKey);
+  }
+  localCoverCache.set(file, dataUrl);
 }
 
 function renderLoadMore(visible, total) {
@@ -598,7 +661,7 @@ function isArchivable(note) {
 }
 
 function completenessText(note) {
-  const cover = note.cover ? "封面:有" : "封面:无";
+  const cover = hasAnyCover(note) ? "封面:有" : "封面:无";
   const classification = noteView(note).classification;
   const classified = classification.pending ? "分类:待审" : classification.path.join("/") === "未分类/待细分" ? "分类:待定" : "分类:有";
   const markdown = note.markdownPath ? "MD:有" : "MD:无";
