@@ -839,8 +839,7 @@ function mergeLocalAndNativeNotes(localNotes, nativeNotes) {
   }
   for (const note of localNotes || []) {
     if (!note || !note.noteId) continue;
-    const nativeNote = byId.get(note.noteId);
-    byId.set(note.noteId, nativeNote ? mergeNoteLocal(note, nativeNote) : note);
+    if (!byId.has(note.noteId)) byId.set(note.noteId, note);
   }
   return Array.from(byId.values()).sort(compareNotesByDiscoveryOrder);
 }
