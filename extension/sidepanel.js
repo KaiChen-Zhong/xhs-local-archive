@@ -314,9 +314,9 @@ async function refreshInsights() {
 async function refreshTaxonomy() {
   const response = await chrome.runtime.sendMessage({ type: "getTaxonomy" }).catch(() => null);
   if (!response || !response.ok) return;
-  const entries = response.taxonomy && response.taxonomy.entries || [];
+  const entries = (response.taxonomy && response.taxonomy.entries || []).filter(visibleTaxonomyEntry);
   const nodes = response.taxonomy && response.taxonomy.nodes || [];
-  const pending = response.taxonomy && response.taxonomy.pendingNodes || [];
+  const pending = (response.taxonomy && response.taxonomy.pendingNodes || []).filter(visibleTaxonomyEntry);
   const levelNames = response.taxonomy && response.taxonomy.levelNames || ["大类", "领域", "主题", "场景", "细项"];
   const locked = nodes.filter((node) => node.locked).length;
   taxonomySummaryEl.textContent = `${nodes.length} 个受控节点 · ${entries.length} 条可用路径 · ${locked} 节点锁定 · ${pending.length} 待审 · 五层：${levelNames.join(" > ")}`;
@@ -605,12 +605,22 @@ function computeClassification(note) {
   const ai = note.ai || {};
   const path = parsePath(ai.categoryPath || ai.path || [ai.category, ai.subcategory]);
   const fallback = inferTaxonomy(note).path;
+  const usablePath = isUnclassifiedPathValue(path) ? fallback : path;
   return {
-    path: path.length ? path : fallback,
+    path: usablePath.length ? usablePath : fallback,
     proposedPath: parsePath(ai.proposedCategoryPath || []),
     pending: Boolean(ai.taxonomyPending),
     error: ai.providerError || ""
   };
+}
+
+function isUnclassifiedPathValue(path) {
+  return !path.length || path.join("/") === "未分类/待细分" || path[0] === "未分类";
+}
+
+function visibleTaxonomyEntry(entry) {
+  const path = parsePath(entry && entry.path || []);
+  return !(isUnclassifiedPathValue(path) && !Number(entry && entry.count || 0));
 }
 
 function needsAiClassification(note) {
@@ -657,7 +667,7 @@ function inferTaxonomy(note) {
   for (const [pattern, path] of rules) {
     if (pattern.test(text)) return { path };
   }
-  return { path: ["未分类", "待细分"] };
+  return { path: ["生活", "日常记录"] };
 }
 
 function statusOf(note) {
